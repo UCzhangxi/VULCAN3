@@ -69,9 +69,10 @@ def _validate_network_assets(cfg) -> list[str]:
     2. Every photodissociation species has a cross-section file
     (`<cross_folder><sp>/<sp>_cross.csv`).
     3. cfg.atom_list entries are recognised column headers in all_compose.txt.
-    4. Every atom_list element is carried by some network species: otherwise
-       its initial column is 0 and the per-step atom_loss is 0/0 = NaN, which
-       rejects every step down to dt_min and the run never converges.
+    4. Every atom_list element outside loss_ex is carried by some network
+       species: otherwise its initial column is 0 and the per-step atom_loss
+       is 0/0 = NaN, which rejects every step down to dt_min and the run never
+       converges (loss_ex elements are left out of that check).
     """
     errors: list[str] = []
 
@@ -123,10 +124,19 @@ def _validate_network_assets(cfg) -> list[str]:
             )
             continue
         # 4. ... and must occur in at least one network species.
+        if atom in getattr(cfg, "loss_ex", []):
+            continue
         col = header.index(atom) - 1
-        if not any(
+        carried = any(
             float(rows[sp][col]) > 0 for sp in chem_funs.spec_list if sp in rows
-        ):
+        )
+        # Without use_solar the seed reads `<X>_H` for every carried element
+        # (ini_abun._base_vector).
+        if (carried and atom != "H" and getattr(cfg, "use_solar", True) is not True
+                and not hasattr(cfg, f"{atom}_H")):
+            errors.append(f"use_solar is off and {atom!r} has no `{atom}_H` "
+                          f"(n_{atom}/n_H) in the config.")
+        if not carried:
             errors.append(
                 f"atom_list entry {atom!r} has no species in network {net_name!r}, "
                 "so its initial column is zero and every step fails the "

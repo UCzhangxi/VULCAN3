@@ -168,7 +168,9 @@ def cli_main(argv=None):
             dict(cfg=cfg, runstate=runstate, integ=integ, output=output,
                  dname=dname)
         )
-        return
+        # An interrupted run is not a success, also for a job wrapper whose
+        # stdin is not a terminal (the shell then exits on EOF at once).
+        sys.exit(130)
 
     print(f"VULCAN3 done. Saving output to {cfg.output_dir}{cfg.out_name}")
     output.save_out(runstate, dname)

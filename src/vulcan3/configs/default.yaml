@@ -208,10 +208,8 @@ save_evo_frq: 10
 use_plot_end: false
 use_plot_evo: false
 plot_dir: plot/
-plot_spec:
+plot_spec:  # species every shipped network carries
 - H2O
 - CH4
 - CO
 - CO2
-- NH3
-- HCN
