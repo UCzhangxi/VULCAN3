@@ -156,6 +156,7 @@ _IGNORED_KEYS = frozenset((
 
 # `<X>_H` elemental ratios: default.yaml declares the shipped elements; a
 # network carrying another element (P, Na, ...) reads its own `<X>_H`.
+# runtime_validation refuses a symbol the composition table does not have.
 _ELEMENT_RATIO_KEY = re.compile(r"[A-Z][a-z]?_H")
 
 
@@ -208,7 +209,13 @@ def _validate_keys(d: dict[str, Any], source: str) -> list[str]:
 def validate_overrides(overrides: dict[str, Any]) -> None:
     """Refuse removed or unknown keys in an override dict, as
     ``load_config(**overrides)`` does, for a caller that applies the dict to a
-    loaded Config with ``setattr`` (which checks nothing)."""
+    loaded Config with ``setattr`` (which checks nothing). Display-only keys
+    are refused here: setattr would apply them, and code has no reason to
+    pass one."""
+    ignored = sorted(set(overrides) & _IGNORED_KEYS)
+    if ignored:
+        raise ValueError(f"config overrides: display-only key(s) {ignored} do "
+                         "nothing in VULCAN3; remove them.")
     _validate_keys(overrides, "config overrides")
 
 

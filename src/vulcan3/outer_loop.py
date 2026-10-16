@@ -3102,10 +3102,13 @@ class OuterLoop:
             return TERM_CONVERGED
         return TERM_NONFINITE
 
-    @staticmethod
-    def _printer_shims(rs):
-        """The legacy (var, para) pair the `Output` printers take. They read
-        only the counters, start_time, termination_reason, atom_loss and
+    def _report_end(self, rs) -> None:
+        """End-of-run report (op.py:1069-1085 and op.stop): print_prog,
+        then print_end_msg (end_case 1) or print_unconverged_msg, which
+        states the reason (2 / 3 / 5).
+
+        The printers take a legacy (var, para) pair and read only the
+        counters, start_time, termination_reason, atom_loss and
         where_varies_most, plus var.t / var.dt / var.longdy / var.longdydt.
         """
         import types
@@ -3129,14 +3132,6 @@ class OuterLoop:
             termination_reason=int(rs.params.termination_reason),
             start_time=float(rs.metadata.start_time),
         )
-        return var, para
-
-    def _report_end(self, rs) -> None:
-        """End-of-run report (op.py:1069-1085 and op.stop): print_prog,
-        then print_end_msg (end_case 1) or print_unconverged_msg, which
-        states the reason (2 / 3 / 5).
-        """
-        var, para = self._printer_shims(rs)
         end_case = int(rs.params.end_case)
         if end_case == TERM_CONVERGED:
             aflux_change = (rs.photo_runtime.aflux_change
@@ -3174,12 +3169,13 @@ class OuterLoop:
                 "(budget_err / budget_drift) or the hybrid vm_mol phase, so a "
                 "resumed run would restart all three from zero."
             )
+        self.interrupted_runstate = None
         init_state, atm_static = self.prepare_runstate(rs)
         if chunk is None:
-            final = self._runner(init_state, atm_static)
+            rs_out = self._unpack_state_to_runstate(
+                self._runner(init_state, atm_static), rs)
         else:
-            final = self._run_chunked(init_state, atm_static, rs, int(chunk))
-        rs_out = self._unpack_state_to_runstate(final, rs)
+            rs_out = self._run_chunked(init_state, atm_static, rs, int(chunk))
         self._report_end(rs_out)
         return rs_out
 
@@ -3187,9 +3183,10 @@ class OuterLoop:
         """Drive `runner_chunk` until a chunk ends short of its target, which
         only a real termination does (a run that ends exactly on a target
         returns from the next call after zero iterations)."""
+        import types
+
         if chunk < 1:
             raise ValueError(f"chunk must be a positive step count, got {chunk}")
-        self.interrupted_runstate = None
         try:
             while True:
                 target = int(state.accept_count) + chunk
@@ -3199,12 +3196,18 @@ class OuterLoop:
                 done = int(nxt.accept_count) < target
                 state = nxt
                 if done:
-                    return state
+                    return self._unpack_state_to_runstate(state, rs)
                 if self._cfg.use_print_prog:
-                    var, para = self._printer_shims(
-                        self._unpack_state_to_runstate(state, rs)
+                    # print_prog reads only these fields.
+                    self.output.print_prog(
+                        types.SimpleNamespace(
+                            t=float(state.t), dt=float(state.dt),
+                            longdy=float(state.longdy),
+                            longdydt=float(state.longdydt)),
+                        types.SimpleNamespace(
+                            count=int(state.accept_count),
+                            where_varies_most=np.asarray(state.where_varies_most)),
                     )
-                    self.output.print_prog(var, para)
         except KeyboardInterrupt:
             self.interrupted_runstate = self._unpack_state_to_runstate(state, rs)
             raise

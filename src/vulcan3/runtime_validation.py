@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import logging
 import math
 from pathlib import Path
@@ -10,6 +11,7 @@ import numpy as np
 
 from . import chem_funs
 from ._paths import resolve_data_path
+from .config import _ELEMENT_RATIO_KEY
 
 logger = logging.getLogger(__name__)
 
@@ -104,6 +106,12 @@ def _validate_network_assets(cfg) -> list[str]:
                     f"{cfg.cross_folder}{sp}/{sp}_cross.csv. "
                     f"Add the file or remove {sp!r} from photo reactions."
                 )
+
+    # An `<X>_H` key for a symbol the table lacks is a typo (config.py
+    # accepts any `<X>_H` so a new network's element can carry one).
+    for key in vars(cfg):
+        if _ELEMENT_RATIO_KEY.fullmatch(key) and key[:-2] not in compose_atoms:
+            errors.append(f"{key!r}: {key[:-2]!r} is not an element of {cfg.com_file}.")
 
     # 3. Refuse atom_list entries not in the composition table header.
     for atom in getattr(cfg, "atom_list", []):
@@ -531,6 +539,17 @@ def validate_runtime_config(cfg) -> None:
     errors.extend(_validate_network_assets(cfg))
     errors.extend(_validate_abundance_preset(cfg))
     errors.extend(_validate_numerical_bounds(cfg))
+
+    # Plots run after the solve; refuse a plot request that would fail there.
+    if getattr(cfg, "use_plot_end", False) or getattr(cfg, "use_plot_evo", False):
+        if importlib.util.find_spec("matplotlib") is None:
+            errors.append("use_plot_end / use_plot_evo need matplotlib: "
+                          "pip install 'vulcan3[plot]'.")
+        plot_spec = list(getattr(cfg, "plot_spec", []))
+        missing = [sp for sp in plot_spec if sp not in species]
+        if not plot_spec or missing:
+            errors.append(f"plot_spec {plot_spec} must list species of the "
+                          f"network; not in it: {missing}.")
 
     if errors:
         raise RuntimeError(
