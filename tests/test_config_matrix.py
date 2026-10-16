@@ -29,7 +29,7 @@ def _run_full_state(count_max: int = 5):
     Sets count_max / count_min / use_print_prog on the process default
     config (conftest restores it).
     """
-    from vulcan_jax.config import default_config
+    from vulcan3.config import default_config
 
     vulcan_cfg = default_config()
 
@@ -37,10 +37,10 @@ def _run_full_state(count_max: int = 5):
     vulcan_cfg.count_min = 1
     vulcan_cfg.use_print_prog = False
 
-    import vulcan_jax.legacy_io as op
-    import vulcan_jax.op_jax as op_jax
-    import vulcan_jax.outer_loop as outer_loop
-    from vulcan_jax.state import RunState
+    import vulcan3.legacy_io as op
+    import vulcan3.op_jax as op_jax
+    import vulcan3.outer_loop as outer_loop
+    from vulcan3.state import RunState
 
     rs = RunState.with_pre_loop_setup(vulcan_cfg)
     rs_out = outer_loop.OuterLoop(op_jax.Ros2JAX(), op.Output())(rs)
@@ -51,10 +51,10 @@ def test_T_cross_sp_path_finite_positive():
     """T-dependent absp cross-section path is finite and non-negative for
     every (sp, layer) pair.
     """
-    import vulcan_jax.photo_setup as photo_setup
+    import vulcan3.photo_setup as photo_setup
 
     data_var, data_atm, _ = load_tpk_state()
-    import vulcan_jax.legacy_io as op
+    import vulcan3.legacy_io as op
 
     rate = op.ReadRate()
     data_var = rate.read_rate(data_var, data_atm)
@@ -75,8 +75,8 @@ def test_use_vm_mol_populates_vm():
     """``use_vm_mol=True`` writes finite, non-zero advective velocity into
     ``atm.vm``.
     """
-    import vulcan_jax.legacy_io as op
-    from vulcan_jax.ini_abun import InitialAbun
+    import vulcan3.legacy_io as op
+    from vulcan3.ini_abun import InitialAbun
 
     set_cfg(use_vm_mol=True)
     data_var, data_atm, make_atm = load_tpk_state()
@@ -117,7 +117,7 @@ def test_bc_flux_loaded_from_file(flag, file_attr, file_path, target_sp):
     ``atm.top_flux`` / ``atm.bot_flux`` from the matching cfg file.
     Verifies non-zero flux for at least one network species.
     """
-    import vulcan_jax.composition as composition
+    import vulcan3.composition as composition
 
     species_list = list(composition.species)
     set_cfg(**{flag: True, file_attr: file_path})

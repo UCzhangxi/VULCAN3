@@ -84,7 +84,7 @@ def main() -> int:
 
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import diffusion_numpy_ref as diff_mod
-    from vulcan_jax.config import default_config
+    from vulcan3.config import default_config
 
     cfg_jax = default_config()
     # op.diffdf is the central scheme, so keep the upwind vm term off even if

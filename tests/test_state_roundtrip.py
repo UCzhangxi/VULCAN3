@@ -16,7 +16,7 @@ def test_roundtrip_field_set_complete(hd189_state):
     test enumerates the AtmData attribute names on the HD189 reference
     state and asserts each runner-visible array attribute is present in
     the AtmInputs slot."""
-    from vulcan_jax.state import pytree_from_store, AtmInputs
+    from vulcan3.state import pytree_from_store, AtmInputs
 
     pt = pytree_from_store(hd189_state.var, hd189_state.atm)
 
@@ -40,7 +40,7 @@ def test_roundtrip_field_set_complete(hd189_state):
     )
 
     # PhotoInputs: sflux_top is populated when use_photo=True.
-    from vulcan_jax.config import default_config
+    from vulcan3.config import default_config
 
     vulcan_cfg = default_config()
 
@@ -53,11 +53,11 @@ def test_roundtrip_field_set_complete(hd189_state):
 
 def test_runstate_output_parameter_schema(hd189_state):
     """RunState-backed `.vul` output exposes VULCAN-master parameter keys."""
-    import vulcan_jax.legacy_io as legacy_io
-    from vulcan_jax.config import default_config
+    import vulcan3.legacy_io as legacy_io
+    from vulcan3.config import default_config
 
     vulcan_cfg = default_config()
-    from vulcan_jax.state import runstate_from_store
+    from vulcan3.state import runstate_from_store
 
     rs = runstate_from_store(hd189_state.var, hd189_state.atm, hd189_state.para)
     _, _, param = legacy_io._synthesize_save_dicts(

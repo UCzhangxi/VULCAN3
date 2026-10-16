@@ -65,8 +65,8 @@ def _ref_TP_H14(pco, params, gs, Pb):
 )
 def test_load_TPK_atm_types(atm_type, P_b, P_t, nz, gs):
     """`load_TPK` matches a direct numpy reference for each standalone atm_type."""
-    from vulcan_jax.phy_const import kb
-    from vulcan_jax.atm_setup import compute_pico, load_TPK
+    from vulcan3.phy_const import kb
+    from vulcan3.atm_setup import compute_pico, load_TPK
 
     pco = make_pco(P_b, P_t, nz)
     pico = np.asarray(compute_pico(pco))
@@ -104,7 +104,7 @@ def test_load_TPK_atm_types(atm_type, P_b, P_t, nz, gs):
 @pytest.mark.parametrize("Kzz_prof", ["const", "JM16", "Pfunc", "file"])
 def test_load_TPK_kzz_modes(Kzz_prof):
     """`atm_setup.load_TPK` matches numpy reference for every Kzz_prof."""
-    from vulcan_jax.atm_setup import compute_pico, load_TPK
+    from vulcan3.atm_setup import compute_pico, load_TPK
 
     nz, P_b, P_t = 100, 1e9, 1e-2
     pco = make_pco(P_b, P_t, nz)
@@ -149,7 +149,7 @@ def test_load_TPK_kzz_modes(Kzz_prof):
 def test_disabled_switches_give_zero_arrays():
     """use_Kzz, use_moldiff, use_settling and the BC-flux flags off give
     all-zero arrays of the right shape."""
-    from vulcan_jax.atm_setup import (
+    from vulcan3.atm_setup import (
         compute_mol_diff, compute_pico, compute_settling_velocity, load_TPK, read_bc_flux,
     )
 
@@ -196,7 +196,7 @@ def _ref_Dzz(atm_base, T, n_tot, mi):
 @pytest.mark.parametrize("atm_base", ["H2", "N2", "O2", "CO2"])
 def test_compute_mol_diff_atm_base(atm_base):
     """compute_mol_diff matches a direct numpy `Dzz_gen` reference per atm_base."""
-    from vulcan_jax.atm_setup import compute_mol_diff, _alpha_array_for_base
+    from vulcan3.atm_setup import compute_mol_diff, _alpha_array_for_base
 
     nz = 30
     Tco = np.linspace(150.0, 2500.0, nz)
@@ -246,7 +246,7 @@ def test_compute_mol_diff_atm_base(atm_base):
 
 def test_read_bc_flux_use_topflux(tmp_path):
     """use_topflux=True parses the file into top_flux."""
-    from vulcan_jax.atm_setup import read_bc_flux
+    from vulcan3.atm_setup import read_bc_flux
 
     bc = tmp_path / "top.txt"
     bc.write_text("# header\nH2O\t1.5e8\nCH4\t3.7e7\n")
@@ -265,7 +265,7 @@ def test_read_bc_flux_use_topflux(tmp_path):
 
 def test_read_bc_flux_use_botflux(tmp_path):
     """use_botflux=True parses (flux, vdep) from the file."""
-    from vulcan_jax.atm_setup import read_bc_flux
+    from vulcan3.atm_setup import read_bc_flux
 
     bc = tmp_path / "bot.txt"
     bc.write_text("# header\nO\t-1.0e9\t0.4\nNH3\t0.0\t0.005\n")
@@ -301,7 +301,7 @@ def test_read_bc_flux_use_botflux(tmp_path):
 )
 def test_compute_sat_p_each_species(sp, T_K):
     """compute_sat_p is finite and positive per condensable at a typical T."""
-    from vulcan_jax.atm_setup import compute_sat_p
+    from vulcan3.atm_setup import compute_sat_p
 
     Tco = np.array([T_K, T_K + 50.0, T_K + 100.0])
     out = compute_sat_p([sp], Tco)
@@ -318,7 +318,7 @@ def test_compute_sat_p_each_species(sp, T_K):
 def test_compute_pico_matches_master_formula():
     """`compute_pico` matches the `Atm.f_pico` formula (geometric-mean
     interior, log extrapolation at edges)."""
-    from vulcan_jax.atm_setup import compute_pico
+    from vulcan3.atm_setup import compute_pico
 
     pco = np.logspace(9, -2, 50)
     pico = np.asarray(compute_pico(pco))
@@ -345,7 +345,7 @@ def test_compute_mu_dz_g_anchor(rocky, Rp, g, P_b, P_t, nz, T_bot, T_top, mix, m
     """rocky=True anchors pref_indx at the surface (index 0); rocky=False with
     P_b >= 1 bar anchors it at the layer nearest 1 bar. At the anchor zco = 0
     and g is the surface gravity; zco increases upward."""
-    from vulcan_jax.atm_setup import compute_mu_dz_g, compute_pico, surface_gravity
+    from vulcan3.atm_setup import compute_mu_dz_g, compute_pico, surface_gravity
 
     pico = np.asarray(compute_pico(make_pco(P_b, P_t, nz)))
     cfg = SimpleNamespace(Rp=Rp, Mp=mass_for_gravity(g, Rp), rocky=rocky, P_b=P_b,
@@ -365,7 +365,7 @@ def test_compute_mu_dz_g_anchor(rocky, Rp, g, P_b, P_t, nz, T_bot, T_top, mix, m
 def test_compute_settling_velocity_h2so4_negative():
     """`use_settling=True` produces negative (downward) vs for non-gas species
     when atm_base has a tabulated viscosity polynomial."""
-    from vulcan_jax.atm_setup import compute_settling_velocity
+    from vulcan3.atm_setup import compute_settling_velocity
 
     cfg = SimpleNamespace(use_settling=True, atm_base="N2", non_gas_sp=["H2SO4_l"])
     species_list = ["N2", "O2", "H2SO4_l"]

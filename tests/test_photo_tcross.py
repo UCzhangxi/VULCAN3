@@ -13,9 +13,9 @@ import pytest
 
 
 def main() -> int:
-    import vulcan_jax.legacy_io as op
-    from vulcan_jax import op_jax, outer_loop
-    from vulcan_jax.state import RunState
+    import vulcan3.legacy_io as op
+    from vulcan3 import op_jax, outer_loop
+    from vulcan3.state import RunState
 
     vulcan_cfg = op.default_config()
 

@@ -46,9 +46,9 @@ def main() -> int:
         )
         return 1
 
-    import vulcan_jax.chem_funs as chem_funs
-    from vulcan_jax.jax_step import AtmStatic
-    from vulcan_jax.steady_state_grad import steady_state_reaction_sensitivity
+    import vulcan3.chem_funs as chem_funs
+    from vulcan3.jax_step import AtmStatic
+    from vulcan3.steady_state_grad import steady_state_reaction_sensitivity
 
     t0 = time.time()
     d = np.load(FIXTURE, allow_pickle=True)

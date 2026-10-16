@@ -16,7 +16,7 @@ import pytest
 
 def _longdy(y, ymix, y_old, n_0, *, atol=1e-2, mtol_conv=1e-20):
     """The shipped reduction, imported so deleting the guard fails this file."""
-    from vulcan_jax.outer_loop import _longdy_reduce
+    from vulcan3.outer_loop import _longdy_reduce
 
     return _longdy_reduce(y, ymix, y_old, n_0, atol=atol, mtol_conv=mtol_conv)[0]
 
@@ -66,7 +66,7 @@ def test_sub_atol_cell_gives_a_finite_batch_independent_tangent():
     denominator gives 0 * inf in the batched max tangent, which the unbatched
     select rewrite hides."""
     # The shipped step-acceptance reduction (same import rule as `_longdy`).
-    from vulcan_jax.outer_loop import _make_aggregate_delta_fn
+    from vulcan3.outer_loop import _make_aggregate_delta_fn
 
     y, ymix, y_old, n_0 = _mk()
     y = y.at[0, 1].set(1e-160)
@@ -97,7 +97,7 @@ def test_end_case_is_not_success_for_a_frozen_or_yielded_lane():
     stop below both caps, so neither cap fires and a fall-through would
     report end_case=1 "Integration successful". A converged state that is
     not finite is not a success either."""
-    from vulcan_jax.outer_loop import OuterLoop
+    from vulcan3.outer_loop import OuterLoop
 
     class _S:
         y = jnp.ones((2, 2))
@@ -128,9 +128,9 @@ def test_single_profile_run_stops_on_a_nonfinite_state(poison, want_reason):
     """
     from _helpers import fast_cfg
 
-    from vulcan_jax import legacy_io, op_jax
-    from vulcan_jax.outer_loop import OuterLoop
-    from vulcan_jax.state import RunState
+    from vulcan3 import legacy_io, op_jax
+    from vulcan3.outer_loop import OuterLoop
+    from vulcan3.state import RunState
 
     cfg = fast_cfg(
         count_max=_COUNT_MAX, Tiso=900.0, use_vm_mol=False, use_hybrid_vm_mol=False

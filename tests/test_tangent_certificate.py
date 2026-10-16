@@ -30,11 +30,11 @@ CONTINUE_STEPS = 1000
 
 
 def _build(case, kzz_scale=1.0):
-    from vulcan_jax.config import load_config
-    from vulcan_jax.legacy_io import Output
-    from vulcan_jax.op_jax import Ros2JAX
-    from vulcan_jax.outer_loop import OuterLoop
-    from vulcan_jax.state import RunState
+    from vulcan3.config import load_config
+    from vulcan3.legacy_io import Output
+    from vulcan3.op_jax import Ros2JAX
+    from vulcan3.outer_loop import OuterLoop
+    from vulcan3.state import RunState
 
     name, use_photo = CASES[case][:2]
     cfg = load_config(name, use_photo=use_photo, use_print_prog=False,

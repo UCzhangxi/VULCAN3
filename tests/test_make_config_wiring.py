@@ -11,15 +11,15 @@ import pytest
 def test_grid_and_runner_overrides_reach_setup_and_runner_without_leakage():
     import numpy as np
 
-    import vulcan_jax
-    import vulcan_jax.legacy_io as op
-    import vulcan_jax.op_jax as op_jax
-    from vulcan_jax import outer_loop
-    from vulcan_jax.state import RunState, legacy_view
+    import vulcan3
+    import vulcan3.legacy_io as op
+    import vulcan3.op_jax as op_jax
+    from vulcan3 import outer_loop
+    from vulcan3.state import RunState, legacy_view
 
     # The process default config is what state._cfg_overlay identity-compares
     # against for its no-op fast path.
-    from vulcan_jax.config import default_config
+    from vulcan3.config import default_config
 
     vulcan_cfg = default_config()
 
@@ -28,7 +28,7 @@ def test_grid_and_runner_overrides_reach_setup_and_runner_without_leakage():
     global_cmax_before = int(vulcan_cfg.count_max)
 
 
-    cfg = vulcan_jax.make_config(
+    cfg = vulcan3.make_config(
         nz=12, P_b=1e5, P_t=1e-2, count_max=37, use_photo=False
     )
     assert cfg is not vulcan_cfg
@@ -70,12 +70,12 @@ def test_one_outer_loop_runs_fresh_runstates_each_on_its_own_atoms():
     not those of the profile the runner was first built for."""
     import numpy as np
 
-    import vulcan_jax
-    import vulcan_jax.legacy_io as op
-    from vulcan_jax import op_jax, outer_loop
-    from vulcan_jax.state import RunState
+    import vulcan3
+    import vulcan3.legacy_io as op
+    from vulcan3 import op_jax, outer_loop
+    from vulcan3.state import RunState
 
-    cfg = vulcan_jax.make_config(
+    cfg = vulcan3.make_config(
         nz=12, P_b=1e5, P_t=1e-2, count_max=5, use_photo=False,
         use_print_prog=False, ini_mix="const_mix",
         const_mix={"H2": 0.9, "He": 0.09, "H2O": 5e-3, "CO": 5e-3},
@@ -104,7 +104,7 @@ def test_one_outer_loop_runs_fresh_runstates_each_on_its_own_atoms():
 # equal species and nr counts are not sufficient.
 def _reordered_network(tmp_path):
     import re
-    from vulcan_jax._paths import PACKAGE_ROOT
+    from vulcan3._paths import PACKAGE_ROOT
     src = (PACKAGE_ROOT / "thermo"
            / "NCHO_photo_network.txt").read_text().splitlines()
     rxn = [i for i, ln in enumerate(src) if re.match(r"^\s*\d+\s*\[", ln)]
@@ -116,7 +116,7 @@ def _reordered_network(tmp_path):
 
 def _renamed_species_network(tmp_path):
     import re
-    from vulcan_jax._paths import PACKAGE_ROOT
+    from vulcan3._paths import PACKAGE_ROOT
     text = (PACKAGE_ROOT / "thermo" / "NCHO_photo_network.txt").read_text()
     renamed = re.sub(r"(?<![A-Za-z0-9_])H(?![A-Za-z0-9_])", "X", text)
     net = tmp_path / "NCHO_H_renamed.txt"
@@ -139,12 +139,12 @@ def _renamed_species_network(tmp_path):
 def test_import_locked_overrides_fail_fast(overrides, pattern, tmp_path):
     import re
 
-    import vulcan_jax
-    from vulcan_jax.state import RunState
+    import vulcan3
+    from vulcan3.state import RunState
 
     if callable(overrides):
         overrides = dict(network=str(overrides(tmp_path)))
-    cfg = vulcan_jax.make_config(**overrides)
+    cfg = vulcan3.make_config(**overrides)
     with pytest.raises(ValueError) as excinfo:
         RunState.with_pre_loop_setup(cfg)
     msg = str(excinfo.value)
@@ -156,10 +156,10 @@ def test_save_cfg_serializes_active_cfg(tmp_path, monkeypatch):
     """Output(cfg=cfg).save_cfg writes the ACTIVE cfg's values (so make_config
     runs are reproducible), not a copy of the packaged vulcan_cfg.py, and it
     writes under dname even when the cwd is somewhere else."""
-    import vulcan_jax
-    from vulcan_jax import legacy_io
+    import vulcan3
+    from vulcan3 import legacy_io
 
-    cfg = vulcan_jax.make_config(out_name="custom.vul", count_max=7)
+    cfg = vulcan3.make_config(out_name="custom.vul", count_max=7)
     work = tmp_path / "cwd"
     dest = tmp_path / "dest"
     work.mkdir()
@@ -176,7 +176,7 @@ def test_clip_fn_degenerate_layer_stays_finite():
     either the gas-mask or no-mask clip branch."""
     import jax.numpy as jnp
 
-    from vulcan_jax.outer_loop import _make_clip_fn
+    from vulcan3.outer_loop import _make_clip_fn
 
     # 3 species; in the gas-mask branch the last column is a non-gas condensate.
     gas_mask = jnp.array([True, True, False])

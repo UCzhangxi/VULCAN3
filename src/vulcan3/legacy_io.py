@@ -389,7 +389,7 @@ def _synthesize_save_dicts(runstate, cfg):
         para_save["small_y"] = float(p.small_y)
         para_save["nega_y"] = float(p.nega_y)
         para_save["end_case"] = int(p.end_case)
-        # VULCAN-JAX addition: the runner's termination code, finer than
+        # VULCAN3 addition: the runner's termination code, finer than
         # end_case (end_case 5 does not say why the run stopped).
         para_save["termination_reason"] = int(p.termination_reason)
         para_save["solver_str"] = "solver"
@@ -639,6 +639,6 @@ def _import_plt():
     except ImportError as exc:
         raise ImportError(
             "use_plot_end / use_plot_evo need matplotlib: pip install "
-            "'vulcan-jax[plot]'"
+            "'vulcan3[plot]'"
         ) from exc
     return plt

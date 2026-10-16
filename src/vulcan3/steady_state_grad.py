@@ -486,7 +486,7 @@ def _host_network(net):
             f"net has {net.nr} reactions but the import-locked network "
             f"{host.network_path} has {host.nr}. The adjoint linearizes the "
             "import-time codegen RHS: pass chem_funs._NET_JAX, and select "
-            "another network with $VULCAN_JAX_NETWORK before the first import."
+            "another network with $VULCAN3_NETWORK before the first import."
         )
     return host
 

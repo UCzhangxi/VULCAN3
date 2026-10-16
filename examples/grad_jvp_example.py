@@ -20,10 +20,10 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-import vulcan_jax.network as _net_mod
-import vulcan_jax.chem as _chem_mod
-from vulcan_jax.config import default_config
-from vulcan_jax.jax_step import jax_ros2_step, AtmStatic
+import vulcan3.network as _net_mod
+import vulcan3.chem as _chem_mod
+from vulcan3.config import default_config
+from vulcan3.jax_step import jax_ros2_step, AtmStatic
 
 
 def main() -> int:

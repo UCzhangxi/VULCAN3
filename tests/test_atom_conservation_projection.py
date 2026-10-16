@@ -28,8 +28,8 @@ def test_projection_conserves_atoms_on_reservoir_rows_only(hd189_state):
     """An injected CH4 defect and the real codegen RHS both project to an atom
     residual under PROJECTION_TOL of their scale, changing reservoir columns only."""
     import jax.numpy as jnp
-    import vulcan_jax.chem_funs as chem_funs
-    import vulcan_jax.jax_step as jax_step
+    import vulcan3.chem_funs as chem_funs
+    import vulcan3.jax_step as jax_step
 
     # Active for the HD189 default: atoms H/O/C/N, all four reservoirs present.
     assert jax_step._CHEM_PROJECTION_ENABLED
@@ -55,9 +55,9 @@ def test_projection_conserves_atoms_on_reservoir_rows_only(hd189_state):
 
 def _hd189_step_inputs(state):
     """(y, k_arr, atm_static, net_jax) from the HD189 pre-loop fixture state."""
-    from vulcan_jax.config import default_config
-    import vulcan_jax.chem_funs as chem_funs
-    import vulcan_jax.jax_step as jax_step
+    from vulcan3.config import default_config
+    import vulcan3.chem_funs as chem_funs
+    import vulcan3.jax_step as jax_step
 
     cfg = default_config()
     data_var, data_atm = state.var, state.atm
@@ -75,7 +75,7 @@ def test_stage_vectors_satisfy_the_per_layer_element_identity(monkeypatch, hd189
     not by roundoff."""
     import jax
     import jax.numpy as jnp
-    import vulcan_jax.jax_step as jax_step
+    import vulcan3.jax_step as jax_step
     from _oracles import stage_defects
 
     y, k_arr, atm, net = _hd189_step_inputs(hd189_state)
@@ -100,7 +100,7 @@ def test_stage_vectors_satisfy_the_per_layer_element_identity(monkeypatch, hd189
     # The uncorrected element change per layer and atom stays under
     # REPAIR_ABS_FLOOR of the layer density at every dt (worst 4x over two
     # stages; bar 10x).
-    from vulcan_jax.config import REPAIR_ABS_FLOOR
+    from vulcan3.config import REPAIR_ABS_FLOOR
     for dt in (1e4, 1e6, 1e8, 1e11, 1e13, 1e15):
         sol, _ = step(y, k_arr, jnp.float64(dt), zero, net)
         change = jnp.abs(sol @ ac - y @ ac)                       # (nz, n_atoms)
@@ -118,7 +118,7 @@ def test_repair_tridiagonal_solve_is_lapack_gtsv_with_its_tangent(hd189_state):
     import jax.numpy as jnp
     from jax.lax.linalg import tridiagonal_solve
 
-    import vulcan_jax.jax_step as js
+    import vulcan3.jax_step as js
 
     def lapack(dl, d, du, g):
         return tridiagonal_solve(dl.T, d.T, du.T, g.T[:, :, None])[:, :, 0].T

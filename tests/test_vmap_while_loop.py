@@ -42,7 +42,7 @@ def _pin_cfg():
 def _build_rs(vulcan_cfg, *, Tiso=None, gs=None, Rp=None):
     """Build a RunState, optionally overriding temperature / gravity / radius
     so two calls produce genuinely different atmospheres."""
-    from vulcan_jax.state import RunState
+    from vulcan3.state import RunState
 
     if Tiso is not None:
         vulcan_cfg.Tiso = float(Tiso)
@@ -54,9 +54,9 @@ def _build_rs(vulcan_cfg, *, Tiso=None, gs=None, Rp=None):
 
 
 def _build_integ():
-    import vulcan_jax.outer_loop as outer_loop
-    import vulcan_jax.legacy_io as op
-    import vulcan_jax.op_jax as op_jax
+    import vulcan3.outer_loop as outer_loop
+    import vulcan3.legacy_io as op
+    import vulcan3.op_jax as op_jax
 
     return outer_loop.OuterLoop(op_jax.Ros2JAX(), op.Output())
 
@@ -74,8 +74,8 @@ def _max_rel_diff(batched_ymix, ref_ymix, floor=YMIX_FLOOR):
 @pytest.mark.strict_isolation
 def test_run_batch_matches_solo_runs():
     import jax.numpy as jnp
-    import vulcan_jax.outer_loop as outer_loop
-    from vulcan_jax.atm_setup import surface_gravity
+    import vulcan3.outer_loop as outer_loop
+    from vulcan3.atm_setup import surface_gravity
 
     vulcan_cfg = _pin_cfg()
     gs0 = float(surface_gravity(vulcan_cfg))

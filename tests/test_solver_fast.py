@@ -1,4 +1,4 @@
-"""The default solver path (`vulcan_jax.solver_fast`, `VULCAN_JAX_SOLVER=fast|ffi`)
+"""The default solver path (`vulcan3.solver_fast`, `VULCAN3_SOLVER=fast|ffi`)
 against the reference factor/solve pair in `solver` (`_oracles.block_thomas_diag_offdiag`).
 
 What must hold, for both backends: the primal is the same solution (bit-identical
@@ -27,9 +27,9 @@ import pytest
 
 jax.config.update("jax_enable_x64", True)
 
-if os.environ.get("VULCAN_JAX_SOLVER") == "reference":
+if os.environ.get("VULCAN3_SOLVER") == "reference":
     pytest.skip(
-        "VULCAN_JAX_SOLVER=reference: solver_fast refuses to import under the "
+        "VULCAN3_SOLVER=reference: solver_fast refuses to import under the "
         "reference solver, so the fast/ffi comparisons do not run",
         allow_module_level=True,
     )
@@ -37,7 +37,7 @@ if os.environ.get("VULCAN_JAX_SOLVER") == "reference":
 from _helpers import load_adj_state
 from _oracles import block_thomas_diag_offdiag
 
-import vulcan_jax.solver_fast as fast_mod
+import vulcan3.solver_fast as fast_mod
 
 ROOT = Path(__file__).resolve().parent.parent
 DTS = (1e2, 3.8e4, 1e6, 1e11)
@@ -202,7 +202,7 @@ def _cuda_device():
     except RuntimeError:
         pytest.skip("no CUDA device visible to JAX: the CUDA kernel is not checked")
     if not fast_mod._CUDA_LIB.exists():
-        pytest.skip(f"{fast_mod._CUDA_LIB.name} not built (python -m vulcan_jax.solver_fast --cuda)")
+        pytest.skip(f"{fast_mod._CUDA_LIB.name} not built (python -m vulcan3.solver_fast --cuda)")
     return dev
 
 
@@ -263,7 +263,7 @@ _SANITIZER_CHILD = r"""
 import os
 import jax, jax.numpy as jnp, numpy as np
 jax.config.update("jax_enable_x64", True)
-import vulcan_jax.solver_fast as fast_mod
+import vulcan3.solver_fast as fast_mod
 dev = jax.devices("cuda")[0]
 # ni 89 and 97 (SNCHO, DMS) in the one-buffer run only: two buffers exceed a sm_89 card
 one_buf = os.environ["VULCAN_JAX_BT_BUFFERS"] == "1"
@@ -282,16 +282,16 @@ for nz, ni in [(1, 5), (3, 16), (4, 33), (6, 64)] + [(3, 89), (2, 97)] * one_buf
 @pytest.mark.parametrize("buffers", ["1", "2"])
 @pytest.mark.parametrize("tool", ["memcheck", "racecheck", "synccheck", "initcheck"])
 def test_cuda_kernel_under_compute_sanitizer(tool, buffers):
-    """Opt-in: set VULCAN_JAX_COMPUTE_SANITIZER to the compute-sanitizer
+    """Opt-in: set VULCAN3_COMPUTE_SANITIZER to the compute-sanitizer
     binary. The CUDA factor and a stacked solve on small pivoting shapes run
     under each tool, one- and two-buffer kernels, and any report fails. XLA's
     platform allocator gives each buffer its own allocation, so memcheck sees
     an overrun past it; command buffers are off, so the launches are plain."""
-    exe = os.environ.get("VULCAN_JAX_COMPUTE_SANITIZER")
+    exe = os.environ.get("VULCAN3_COMPUTE_SANITIZER")
     if not exe:
-        pytest.skip("set VULCAN_JAX_COMPUTE_SANITIZER to the compute-sanitizer binary to run")
+        pytest.skip("set VULCAN3_COMPUTE_SANITIZER to the compute-sanitizer binary to run")
     if not fast_mod._CUDA_LIB.exists():
-        pytest.skip(f"{fast_mod._CUDA_LIB.name} not built (python -m vulcan_jax.solver_fast --cuda)")
+        pytest.skip(f"{fast_mod._CUDA_LIB.name} not built (python -m vulcan3.solver_fast --cuda)")
     env = {k: v for k, v in os.environ.items() if k != "JAX_PLATFORMS"}
     env.update(XLA_PYTHON_CLIENT_ALLOCATOR="platform", XLA_PYTHON_CLIENT_PREALLOCATE="false",
                XLA_FLAGS="--xla_gpu_enable_command_buffer=", VULCAN_JAX_BT_BUFFERS=buffers)
@@ -307,9 +307,9 @@ def test_cuda_kernel_under_compute_sanitizer(tool, buffers):
 # them too, so the comparison also proves both children solved the same bytes.
 BUFFER_DTS = (3.8e4, 1e6, 1e11)
 _BUFFER_NETS = {  # fixture, config, the child's network environment
-    "HD189": ("adj_state_hd189.npz", {"VULCAN_JAX_NETWORK": "thermo/NCHO_photo_network.txt"}),
-    "W39b": ("adj_state_w39b.npz", {"VULCAN_JAX_NETWORK": "thermo/SNCHO_photo_network.txt",
-                                    "VULCAN_JAX_ATOM_LIST": "H,O,C,N,S"}),
+    "HD189": ("adj_state_hd189.npz", {"VULCAN3_NETWORK": "thermo/NCHO_photo_network.txt"}),
+    "W39b": ("adj_state_w39b.npz", {"VULCAN3_NETWORK": "thermo/SNCHO_photo_network.txt",
+                                    "VULCAN3_ATOM_LIST": "H,O,C,N,S"}),
 }
 _BUFFERS_CHILD = r"""
 import os, sys
@@ -318,7 +318,7 @@ repo, fixture, cfg_name, out = sys.argv[1:5]
 sys.path.insert(0, os.path.join(repo, "tests"))
 import jax, jax.numpy as jnp
 from test_solver_fast import BUFFER_DTS, _kernel_case, capture_stage1
-import vulcan_jax.solver_fast as fast_mod
+import vulcan3.solver_fast as fast_mod
 cpu, dev = jax.devices("cpu")[0], jax.devices("cuda")[0]
 with jax.default_device(cpu):
     cases = {f"dt{dt:g}": [np.asarray(a) for a in capture_stage1(fixture, cfg_name, dt)]
@@ -388,7 +388,7 @@ def test_one_buffer_kernels_are_bitwise_the_two_buffer_ones(net, case, buffer_va
 def capture_stage1(fixture: str, cfg_name: str, dt: float):
     """The stage-1 system `_ros2_stages` assembles from a saved converged state,
     recorded by wrapping the solver entry points the step imports."""
-    from vulcan_jax import jax_step
+    from vulcan3 import jax_step
 
     atm, net, y, k_arr = load_adj_state(fixture, cfg_name)
     cap: dict = {}
@@ -525,7 +525,7 @@ def check_matrix_free(fixture: str, cfg_name: str, backend: str):
     amplified by the block conditioning with room to spare. dt 1e11 is not compared
     (the tangent is O(1)-conditioned there). Also run by the SNCHO child for
     W39b."""
-    from vulcan_jax import jax_step
+    from vulcan3 import jax_step
 
     fast_mod.BACKEND = backend
     atm, net, y, k_arr = load_adj_state(fixture, cfg_name)
@@ -603,9 +603,9 @@ def test_matrix_free_operator_matches_the_dense_one(fast):
 
 def test_fast_is_the_default_solver():
     """With the switch unset, `jax_step` binds the `solver_fast` entry points."""
-    if "VULCAN_JAX_SOLVER" in os.environ:
-        pytest.skip("VULCAN_JAX_SOLVER is set: the default binding is not checked")
-    from vulcan_jax import jax_step
+    if "VULCAN3_SOLVER" in os.environ:
+        pytest.skip("VULCAN3_SOLVER is set: the default binding is not checked")
+    from vulcan3 import jax_step
 
     assert jax_step.solve_block_thomas_diag_offdiag is fast_mod.solve
     assert jax_step.factor_block_thomas_diag_offdiag is fast_mod.factor
@@ -613,11 +613,11 @@ def test_fast_is_the_default_solver():
 
 _CHILD = r"""
 import os, sys
-os.environ["VULCAN_JAX_ATOM_LIST"] = "H,O,C,N,S"
+os.environ["VULCAN3_ATOM_LIST"] = "H,O,C,N,S"
 repo = sys.argv[1]
 sys.path.insert(0, os.path.join(repo, "tests"))
 from test_solver_fast import check_matrix_free, check_real_blocks
-import vulcan_jax.solver_fast as fast_mod
+import vulcan3.solver_fast as fast_mod
 for backend in ("fast", "ffi"):
     if backend == "ffi":
         fast_mod.build()

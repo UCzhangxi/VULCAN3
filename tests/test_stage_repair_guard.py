@@ -44,7 +44,7 @@ def stage_arrays(fixture: str, cfg_name: str, dt: float, frac: float):
     """(y, k1, k2) of one Ros2 step from a saved converged state, with the
     repair guard set to `frac`. Also imported by the SNCHO child below."""
     import jax.numpy as jnp
-    import vulcan_jax.jax_step as jax_step
+    import vulcan3.jax_step as jax_step
 
     atm, net, y, k_arr = load_adj_state(fixture, cfg_name)
     saved, jax_step._REPAIR_MAX_CELL_FRAC = jax_step._REPAIR_MAX_CELL_FRAC, frac
@@ -62,21 +62,21 @@ def step_solution(y, k1, k2):
 
 
 # The child selects SNCHO (network) and an S-bearing atom_list before the first
-# vulcan_jax import, then reuses this module's helper. It prints, per dt, how
+# vulcan3 import, then reuses this module's helper. It prints, per dt, how
 # many band H2S cells the guarded and the unguarded repair flip negative.
 _CHILD = r"""
 import json, os, sys
-os.environ["VULCAN_JAX_ATOM_LIST"] = "H,O,C,N,S"
+os.environ["VULCAN3_ATOM_LIST"] = "H,O,C,N,S"
 repo = sys.argv[1]
 sys.path.insert(0, os.path.join(repo, "tests"))
 from test_stage_repair_guard import BAND, stage_arrays, step_solution
-from vulcan_jax import jax_step
+from vulcan3 import jax_step
 
 out = {}
 for dt in (1e8, 1e11):
     y, k1, k2 = stage_arrays("adj_state_w39b.npz", "W39b", dt, 0.0)
     raw = step_solution(y, k1, k2)
-    import vulcan_jax.chem_funs as cf
+    import vulcan3.chem_funs as cf
     h2s = cf.spec_list.index("H2S")
     counts = {}
     guarded = jax_step._REPAIR_MAX_CELL_FRAC
@@ -132,7 +132,7 @@ def test_guard_clamps_only_trace_carrier_cells_of_the_hd189_column():
     """At dt 1e6 the p99 per-cell correction ratio stays under 1.1e-2, the
     guard clamps only carriers below VMR 1e-10, and stage 1 is
     unchanged on every other cell."""
-    import vulcan_jax.jax_step as jax_step
+    import vulcan3.jax_step as jax_step
     args = ("adj_state_hd189.npz", "default", 1e6)
     y, g1, _ = stage_arrays(*args, jax_step._REPAIR_MAX_CELL_FRAC)
     _, u1, _ = stage_arrays(*args, float("inf"))

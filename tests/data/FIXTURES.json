@@ -1,6 +1,6 @@
 {
   "generated_utc": "2026-09-19T08:40:11Z",
-  "vulcan_jax_commit": "e7edf8ac6d800eb2c9c30c5f9b4d10d8444d8b2d-dirty",
+  "vulcan3_commit": "e7edf8ac6d800eb2c9c30c5f9b4d10d8444d8b2d-dirty",
   "platform_machine": "arm64",
   "versions": {
     "python": "3.12.11",
@@ -8,7 +8,7 @@
     "jaxlib": "0.6.2",
     "numpy": "1.26.4",
     "scipy": "1.17.1",
-    "vulcan_jax": "0.15.0"
+    "vulcan3": "0.15.0"
   },
   "config_sha256_16": {
     "default.yaml": "db6556f04810197a",

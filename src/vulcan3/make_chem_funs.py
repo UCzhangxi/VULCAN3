@@ -157,7 +157,7 @@ def build_chem_rhs(net: Network) -> Callable:
     Returns a `jax.jit`'d callable with signature
     `(y[nz, ni], M[nz], k[nr+1, nz]) -> dydt[nz, ni]`. The XLA-compiled
     artifact is reused across processes via JAX's persistent disk cache
-    (configured in `vulcan_jax_cli.py`). The Python source cache file under
+    (configured in `cli.py`). The Python source cache file under
     `__pycache__/` is for human inspection: `cat` it to compare against
     VULCAN-master's `chem_funs.py` reaction lambdas.
     """

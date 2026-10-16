@@ -1,4 +1,4 @@
-"""Default block-Thomas path (`VULCAN_JAX_SOLVER=fast|ffi`, import-frozen).
+"""Default block-Thomas path (`VULCAN3_SOLVER=fast|ffi`, import-frozen).
 
 Same call shape as `solver.py`: `factor(diag, sup_d, sub_d)` once, then
 `solve(factors, rhs)` for each Ros2 stage. Two things differ from the plain
@@ -10,20 +10,21 @@ Same call shape as `solver.py`: `factor(diag, sup_d, sub_d)` once, then
    primal is the same code on the same inputs and is
    bit-identical. Reverse mode transposes the primal sweep on the same
    factors.
-2. With `VULCAN_JAX_SOLVER=ffi` the raw factor and solve are one C++ call each
-   (`csrc/block_thomas_cpu.cc`, built by `python -m vulcan_jax.solver_fast`):
+2. With `VULCAN3_SOLVER=ffi` the raw factor and solve are one C++ call each
+   (`csrc/block_thomas_cpu.cc`, built by `python -m vulcan3.solver_fast`):
    the CPU reference for the fused GPU kernel. `custom_linear_solve` makes
    these calls, which have no AD rules, differentiable. Reverse mode runs the
    JAX transpose sweep on the kernel's factors (`transpose_solve` below).
 
 On a CUDA device the `ffi` backend runs `csrc/block_thomas_cuda.cu` (its
 header gives the launch layout and the one/two-buffer choice;
-`VULCAN_JAX_BT_BUFFERS=1|2` forces a variant): one factor launch and two solve
-launches per Ros2 step. It is built only by `python -m vulcan_jax.solver_fast
+`VULCAN_JAX_BT_BUFFERS=1|2` forces a variant; the kernel reads that name,
+and renaming it would change the source hash every built library carries):
+one factor launch and two solve launches per Ros2 step. It is built only by `python -m vulcan3.solver_fast
 --cuda` on a host with nvcc; without the library nothing changes here and a
 device call under `ffi` fails loudly at dispatch.
 
-`jax_step` imports this module by default; `VULCAN_JAX_SOLVER=reference`
+`jax_step` imports this module by default; `VULCAN3_SOLVER=reference`
 restores the plain `solver.py` pair for A/B, and `ffi` selects the C++ kernel.
 """
 
@@ -46,10 +47,10 @@ import jax.numpy as jnp
 
 from . import solver as _ref
 
-BACKEND = os.environ.get("VULCAN_JAX_SOLVER", "fast")
+BACKEND = os.environ.get("VULCAN3_SOLVER", "fast")
 if BACKEND not in ("fast", "ffi"):
     raise ValueError(
-        f"VULCAN_JAX_SOLVER={BACKEND!r}: expected 'fast' (default), 'ffi', "
+        f"VULCAN3_SOLVER={BACKEND!r}: expected 'fast' (default), 'ffi', "
         "or 'reference' (handled in jax_step)"
     )
 
@@ -214,7 +215,7 @@ def _register():
         raise RuntimeError(
             f"{_CUDA_LIB} was not built from the present {cu_src.name} and "
             "block_thomas_common.h; rebuild it on the GPU host with `python -m "
-            "vulcan_jax.solver_fast --cuda`, or delete it to run the CPU kernel only."
+            "vulcan3.solver_fast --cuda`, or delete it to run the CPU kernel only."
         )
     lib = ctypes.CDLL(str(build()))
     jax.ffi.register_ffi_target(

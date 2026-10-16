@@ -15,12 +15,12 @@ import sys
 
 import pytest
 
-from vulcan_jax.config import load_config
+from vulcan3.config import load_config
 
 _GATES = {"HD189": 1495, "HD209": 1211, "W39b": 1202}
 # The CLI selects each config's import-frozen network by re-executing itself;
 # an inherited selection would run the config on the wrong network.
-_FROZEN_ENV = ("VULCAN_JAX_NETWORK", "VULCAN_JAX_ATOM_LIST", "VULCAN_JAX_CLI_RELAUNCHED")
+_FROZEN_ENV = ("VULCAN3_NETWORK", "VULCAN3_ATOM_LIST", "VULCAN3_CLI_RELAUNCHED")
 
 
 @pytest.mark.slow
@@ -28,7 +28,7 @@ _FROZEN_ENV = ("VULCAN_JAX_NETWORK", "VULCAN_JAX_ATOM_LIST", "VULCAN_JAX_CLI_REL
 def test_cli_step_count_gate(name, count, tmp_path):
     env = {k: v for k, v in os.environ.items() if k not in _FROZEN_ENV}
     res = subprocess.run(
-        [sys.executable, "-m", "vulcan_jax.vulcan_jax_cli", "--config", name],
+        [sys.executable, "-m", "vulcan3.cli", "--config", name],
         cwd=tmp_path, env=env, capture_output=True, text=True, timeout=3600, check=False,
     )
     assert res.returncode == 0, res.stdout[-3000:] + res.stderr[-3000:]

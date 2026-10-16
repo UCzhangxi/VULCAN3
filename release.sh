@@ -5,7 +5,7 @@ set -x
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$SCRIPT_DIR"
-LOG="${TMPDIR:-/tmp}/vulcan_jax_testpypi_release_$(date +'%Y-%m-%d_%H%M%S').log"
+LOG="${TMPDIR:-/tmp}/vulcan3_testpypi_release_$(date +'%Y-%m-%d_%H%M%S').log"
 
 exec > >(tee -a "$LOG") 2>&1
 
@@ -41,18 +41,18 @@ test -z "$(git status --porcelain --untracked-files=no)" || { echo "dirty tree";
 unset PYTHONSAFEPATH   # strips the cwd from sys.path and breaks the parity tests
 python -m pytest tests -q
 
-# 2) Bump patch version in src/vulcan_jax/_version.py
+# 2) Bump patch version in src/vulcan3/_version.py
 VER="$(
 python - <<'PY'
 from pathlib import Path
 import re
 
-p = Path("src/vulcan_jax/_version.py")
+p = Path("src/vulcan3/_version.py")
 t = p.read_text(encoding="utf-8")
 
 m = re.search(r'__version__\s*=\s*"(\d+)\.(\d+)\.(\d+)"', t)
 if not m:
-    raise SystemExit("ERROR: could not parse __version__ in src/vulcan_jax/_version.py")
+    raise SystemExit("ERROR: could not parse __version__ in src/vulcan3/_version.py")
 
 a, b, c = map(int, m.groups())
 new = f"{a}.{b}.{c+1}"
@@ -72,7 +72,7 @@ python -m build
 
 # 4) Commit + push (only after build succeeds)
 git status
-git add src/vulcan_jax/_version.py
+git add src/vulcan3/_version.py
 git commit -m "Release v$VER"
 git tag -a "v$VER" -m "Release v$VER"
 git push origin main
@@ -82,7 +82,7 @@ export TWINE_USERNAME="__token__"
 python -m twine upload --verbose --repository-url https://test.pypi.org/legacy/ dist/*
 
 # 5) Install the upload into a THROWAWAY venv (never the workspace env, whose
-#    vulcan-jax is the editable checkout)
+#    vulcan3 is the editable checkout)
 RELCHECK="$(mktemp -d)/relcheck"
 python -m venv "$RELCHECK"
 source "$RELCHECK/bin/activate"
@@ -94,7 +94,7 @@ for i in $(seq 1 12); do
   if python -m pip install --dry-run --no-cache-dir \
        --index-url https://test.pypi.org/simple/ \
        --extra-index-url https://pypi.org/simple/ \
-       "vulcan-jax==$VER" 2>/dev/null; then
+       "vulcan3==$VER" 2>/dev/null; then
     echo "v$VER is available!"
     break
   fi
@@ -104,8 +104,8 @@ done
 python -m pip install --no-cache-dir \
   --index-url https://test.pypi.org/simple/ \
   --extra-index-url https://pypi.org/simple/ \
-  "vulcan-jax==$VER"
+  "vulcan3==$VER"
 
-python -c "import vulcan_jax; print('installed', vulcan_jax.__version__)"
+python -c "import vulcan3; print('installed', vulcan3.__version__)"
 
 echo "DONE. Full transcript: $LOG"

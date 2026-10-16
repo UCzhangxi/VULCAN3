@@ -27,11 +27,11 @@ def test_hd189_kernel_vmap_matches_single_calls(hd189_state, kernel) -> None:
     """`vmap(kernel)` over perturbed HD189 columns agrees with single calls."""
     import jax
     import jax.numpy as jnp
-    import vulcan_jax.chem as chem_mod
-    import vulcan_jax.chem_funs as chem_funs
-    import vulcan_jax.network as net_mod
-    import vulcan_jax.photo as photo_mod
-    from vulcan_jax.config import default_config
+    import vulcan3.chem as chem_mod
+    import vulcan3.chem_funs as chem_funs
+    import vulcan3.network as net_mod
+    import vulcan3.photo as photo_mod
+    from vulcan3.config import default_config
 
     y = jnp.asarray(hd189_state.var.y, dtype=jnp.float64)
     M = jnp.asarray(hd189_state.atm.M, dtype=jnp.float64)

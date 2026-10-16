@@ -3090,7 +3090,7 @@ class OuterLoop:
         while hitting a cap reads end_case=1, and so does a hybrid phase-1
         convergence past the static count_max.
 
-        end_case=5 is a VULCAN-JAX addition with no upstream counterpart: the
+        end_case=5 is a VULCAN3 addition with no upstream counterpart: the
         run stopped without meeting the convergence criterion and without
         hitting either cap -- a run stopped on a non-finite state
         (termination_reason 5) or a "converged" state that is not finite.

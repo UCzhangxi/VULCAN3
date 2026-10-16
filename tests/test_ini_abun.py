@@ -25,8 +25,8 @@ def test_const_mix_matches_reference():
     """`y[:, i] = const_mix[sp] * gas_tot` for every species in the dict;
     zeros elsewhere.
     """
-    from vulcan_jax.ini_abun import InitialAbun
-    import vulcan_jax.composition as composition
+    from vulcan3.ini_abun import InitialAbun
+    import vulcan3.composition as composition
 
     data_var, data_atm, _ = load_tpk_state()
     # Earth-style mixing dict (species that exist in HD189's network).
@@ -56,8 +56,8 @@ def test_const_mix_matches_reference():
 
 def test_vulcan_ini_roundtrip(tmp_path):
     """`vulcan_ini` mode restores each species column from the `.vul` exactly."""
-    from vulcan_jax.ini_abun import InitialAbun
-    import vulcan_jax.composition as composition
+    from vulcan3.ini_abun import InitialAbun
+    import vulcan3.composition as composition
 
     data_var, data_atm, _ = load_tpk_state()
     prev_species = list(composition.species)
@@ -78,8 +78,8 @@ def test_table_roundtrip(tmp_path):
     contain a column per species (master indexes `table[sp]` for every
     species); a sparse table does not work.
     """
-    from vulcan_jax.ini_abun import InitialAbun
-    import vulcan_jax.composition as composition
+    from vulcan3.ini_abun import InitialAbun
+    import vulcan3.composition as composition
 
     data_var, data_atm, _ = load_tpk_state()
     nz_ = len(data_atm.pco)
@@ -137,7 +137,7 @@ def test_const_lowT_matches_scipy(O_H, C_H, He_H, N_H):
     fsolve to 1e-13."""
     import jax.numpy as jnp
     from scipy.optimize import fsolve
-    from vulcan_jax.ini_abun import _abun_lowT_residual, _jax_newton
+    from vulcan3.ini_abun import _abun_lowT_residual, _jax_newton
 
     def master_res(x, *args):
         return list(_abun_lowT_residual(jnp.asarray(x), *args))
@@ -165,7 +165,7 @@ def test_column_atoms_uses_the_operator_invariant():
     on a nonuniform grid. On a uniform grid `w == dz`, so the budget reduces
     to the unweighted `atom_loss` relative change identically.
     """
-    from vulcan_jax.ini_abun import column_atoms, operator_column_weights
+    from vulcan3.ini_abun import column_atoms, operator_column_weights
 
     rng = np.random.default_rng(7)
     nz, ni, na = 12, 5, 3

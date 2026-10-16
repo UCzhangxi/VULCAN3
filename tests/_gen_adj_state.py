@@ -38,7 +38,7 @@ DT = 1e8
 N_POLISH = 40
 
 # The W39b state needs the sulfur network and its atom list. These are
-# import-locked env vars: they must be set BEFORE the first `import vulcan_jax`,
+# import-locked env vars: they must be set BEFORE the first `import vulcan3`,
 # which is why this module imports jax lazily inside the builders.
 W39B_NETWORK = "thermo/SNCHO_photo_network.txt"
 W39B_ATOM_LIST = "H,O,C,N,S"
@@ -65,7 +65,7 @@ def build_hd189(out_dir: Path) -> Path:
 
     jax.config.update("jax_enable_x64", True)
 
-    from vulcan_jax.config import load_config
+    from vulcan3.config import load_config
 
     cfg = load_config("default")
     cfg.use_print_prog = False
@@ -74,12 +74,12 @@ def build_hd189(out_dir: Path) -> Path:
     cfg.count_max = 3000
     cfg.runtime = 1e14
 
-    from vulcan_jax import chem as chem_mod, composition, network as net_mod
-    from vulcan_jax.jax_step import jax_ros2_step, make_atm_static
-    from vulcan_jax.state import RunState, legacy_view
-    import vulcan_jax.legacy_io as op
-    import vulcan_jax.op_jax as op_jax
-    import vulcan_jax.outer_loop as outer_loop
+    from vulcan3 import chem as chem_mod, composition, network as net_mod
+    from vulcan3.jax_step import jax_ros2_step, make_atm_static
+    from vulcan3.state import RunState, legacy_view
+    import vulcan3.legacy_io as op
+    import vulcan3.op_jax as op_jax
+    import vulcan3.outer_loop as outer_loop
 
     rs = RunState.with_pre_loop_setup(cfg)
     network = net_mod.parse_network(cfg.network)
@@ -146,9 +146,9 @@ def build_w39b(out_dir: Path) -> Path:
     The dJ/dy feedback (second order) is omitted.
     """
     t0 = time.time()
-    # Import-locked: must precede the first `import vulcan_jax` in this process.
-    os.environ["VULCAN_JAX_NETWORK"] = W39B_NETWORK
-    os.environ["VULCAN_JAX_ATOM_LIST"] = W39B_ATOM_LIST
+    # Import-locked: must precede the first `import vulcan3` in this process.
+    os.environ["VULCAN3_NETWORK"] = W39B_NETWORK
+    os.environ["VULCAN3_ATOM_LIST"] = W39B_ATOM_LIST
     os.environ.setdefault("OMP_NUM_THREADS", "1")
     os.chdir(ROOT)
 
@@ -157,19 +157,19 @@ def build_w39b(out_dir: Path) -> Path:
 
     jax.config.update("jax_enable_x64", True)
 
-    from vulcan_jax.config import load_config
+    from vulcan3.config import load_config
 
     cfg = load_config("W39b")
     cfg.use_print_prog = False
     cfg.yconv_cri = 1e-3
 
-    from vulcan_jax import composition, network as net_mod
-    from vulcan_jax._paths import resolve_data_path
-    from vulcan_jax.jax_step import make_atm_static
-    from vulcan_jax.state import RunState, legacy_view
-    import vulcan_jax.legacy_io as op
-    import vulcan_jax.op_jax as op_jax
-    import vulcan_jax.outer_loop as outer_loop
+    from vulcan3 import composition, network as net_mod
+    from vulcan3._paths import resolve_data_path
+    from vulcan3.jax_step import make_atm_static
+    from vulcan3.state import RunState, legacy_view
+    import vulcan3.legacy_io as op
+    import vulcan3.op_jax as op_jax
+    import vulcan3.outer_loop as outer_loop
 
     rs = RunState.with_pre_loop_setup(cfg)
     _var, atm, para = legacy_view(rs)
@@ -181,7 +181,7 @@ def build_w39b(out_dir: Path) -> Path:
         raise RuntimeError(
             f"SO2 is not in the network parsed from {cfg.network!r} "
             f"({ni} species). The W39b adjoint fixture is an SO2 sensitivity "
-            "state; check $VULCAN_JAX_NETWORK.")
+            "state; check $VULCAN3_NETWORK.")
     so2 = sidx["SO2"]
     print(f"[w39b] setup {time.time() - t0:.1f}s nz={nz} ni={ni} nr={nr} "
           f"SO2@{so2}", flush=True)

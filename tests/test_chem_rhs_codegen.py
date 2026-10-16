@@ -32,7 +32,7 @@ PEAK_FLOOR_FRAC = 1e-12  # per-species denominator floor, a fraction of the spec
 
 def _toy_network_for_codegen(tmp_path: Path):
     """Return a tiny network that exercises codegen order-sensitive cases."""
-    from vulcan_jax.network import Network
+    from vulcan3.network import Network
 
     ni = 3
     nr = 4
@@ -108,7 +108,7 @@ def _toy_network_for_codegen(tmp_path: Path):
 
 def test_codegen_source_preserves_master_emission_rules(tmp_path):
     """Generated RHS keeps VULCAN-master's order-sensitive chemdf shape."""
-    import vulcan_jax.make_chem_funs as mcf
+    import vulcan3.make_chem_funs as mcf
 
     net = _toy_network_for_codegen(tmp_path)
     src = mcf.emit_chem_rhs_source(net)
@@ -122,7 +122,7 @@ def test_codegen_source_preserves_master_emission_rules(tmp_path):
 
 def test_codegen_cache_key_changes_with_the_generator(tmp_path, monkeypatch):
     """A codegen fix must re-key, or the stale cache file is exec'd instead."""
-    import vulcan_jax.make_chem_funs as mcf
+    import vulcan3.make_chem_funs as mcf
 
     net = _toy_network_for_codegen(tmp_path)
     key0 = mcf.chem_rhs_cache_key(net)
@@ -139,7 +139,7 @@ def test_codegen_cache_key_changes_with_the_generator(tmp_path, monkeypatch):
 def test_codegen_cache_key_changes_with_consumed_network_fields(tmp_path):
     """Cache key invalidates when any codegen-consumed network table changes."""
     import dataclasses
-    import vulcan_jax.make_chem_funs as mcf
+    import vulcan3.make_chem_funs as mcf
 
     net = _toy_network_for_codegen(tmp_path)
     key0 = mcf.chem_rhs_cache_key(net)
@@ -162,10 +162,10 @@ def _hd209_repeated_final_layer_fixture() -> tuple[
     np.ndarray, np.ndarray, np.ndarray, object, tuple[str, ...], np.ndarray
 ]:
     """Return one HD209 final-state layer repeated to the production column shape."""
-    from vulcan_jax.config import default_config
+    from vulcan3.config import default_config
 
     vulcan_cfg = default_config()
-    import vulcan_jax.network as net_mod
+    import vulcan3.network as net_mod
 
     saved = ROOT / "output" / "HD209.vul"
     if not saved.exists():
@@ -173,9 +173,9 @@ def _hd209_repeated_final_layer_fixture() -> tuple[
         # it: skip only under the missing-fixture switch, fail otherwise.
         _missing = (
             "HD209 steady-state oracle absent; run "
-            "`python -m vulcan_jax.vulcan_jax_cli --config HD209`"
+            "`python -m vulcan3.cli --config HD209`"
         )
-        if os.environ.get("VULCAN_JAX_ALLOW_MISSING_FIXTURES") == "1":
+        if os.environ.get("VULCAN3_ALLOW_MISSING_FIXTURES") == "1":
             pytest.skip(_missing)
         pytest.fail(_missing)
 
@@ -212,8 +212,8 @@ def test_hd209_jit_rhs_projection_removes_atom_residual() -> None:
     platform), so only the unjitted and projected residuals are asserted."""
     import jax
     import jax.numpy as jnp
-    import vulcan_jax.make_chem_funs as mcf
-    import vulcan_jax.jax_step as jax_step
+    import vulcan3.make_chem_funs as mcf
+    import vulcan3.jax_step as jax_step
     from _oracles import chem_rhs_numpy
 
     y, M, k_arr, net, atoms, atom_counts = _hd209_repeated_final_layer_fixture()
@@ -252,8 +252,8 @@ def test_hd209_jacobian_projection_uses_same_reservoir_rows() -> None:
     """Projected chemistry Jacobian: atom residual at roundoff, only reservoir rows changed."""
     import jax
     import jax.numpy as jnp
-    import vulcan_jax.chem as chem_mod
-    import vulcan_jax.jax_step as jax_step
+    import vulcan3.chem as chem_mod
+    import vulcan3.jax_step as jax_step
 
     y, M, k_arr, net, _, atom_counts = _hd209_repeated_final_layer_fixture()
     net_jax = chem_mod.to_jax(net)
@@ -280,8 +280,8 @@ def test_codegen_matches_numpy_oracle(hd189_state):
     cancellation on trace species. The column is scaled by exp(U(-1,1)) off
     equilibrium: at the EQ seed the net RHS is a small difference of large
     terms, where a per-cell relative comparison is ill-posed."""
-    import vulcan_jax.network as net_mod
-    from vulcan_jax.config import default_config
+    import vulcan3.network as net_mod
+    from vulcan3.config import default_config
 
     net = net_mod.parse_network(default_config().network)
     M = np.asarray(hd189_state.atm.M, dtype=np.float64)
@@ -290,7 +290,7 @@ def test_codegen_matches_numpy_oracle(hd189_state):
     y = y * np.exp(np.random.default_rng(0).uniform(-1.0, 1.0, y.shape))
 
     import jax.numpy as jnp
-    import vulcan_jax.make_chem_funs as mcf
+    import vulcan3.make_chem_funs as mcf
     from _oracles import chem_rhs_numpy
 
     fn = mcf.build_chem_rhs(net)

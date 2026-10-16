@@ -27,7 +27,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from vulcan_jax.phy_const import Navo, kb
+from vulcan3.phy_const import Navo, kb
 
 
 @dataclass

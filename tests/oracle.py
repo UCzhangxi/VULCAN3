@@ -12,7 +12,7 @@ Four rules:
    the pinned text once.
 
 Local runs skip without an oracle; release CI sets
-`VULCAN_JAX_REQUIRE_ORACLE=1` so a missing oracle fails.
+`VULCAN3_REQUIRE_ORACLE=1` so a missing oracle fails.
 """
 
 from __future__ import annotations
@@ -33,7 +33,7 @@ ROOT = Path(__file__).resolve().parent.parent
 MANIFEST_PATH = Path(__file__).resolve().parent / "science_sources.yaml"
 
 ENV_DIR = "VULCAN_MASTER_DIR"
-ENV_REQUIRE = "VULCAN_JAX_REQUIRE_ORACLE"
+ENV_REQUIRE = "VULCAN3_REQUIRE_ORACLE"
 
 _MANIFEST_CACHE: dict | None = None
 
@@ -80,7 +80,7 @@ def oracle_dir_or_skip(what: str) -> Path:
     The parent (`run_oracle_subprocess` -> `oracle_worktree` -> `require_oracle`)
     verifies the pin and points `VULCAN_MASTER_DIR` at a copy with no `.git`, so
     the child can only check existence. Fails instead under
-    `VULCAN_JAX_REQUIRE_ORACLE=1`.
+    `VULCAN3_REQUIRE_ORACLE=1`.
     """
     path = oracle_dir()
     if path is not None and path.is_dir():
@@ -277,7 +277,7 @@ def oracle_worktree(
             shutil.copy2(_oracle_fastchem_binary(family, src),
                          oracle_fastchem / "fastchem")
         if fastchem_abundance is not None:
-            abundance = (ROOT / "src" / "vulcan_jax" / "thermo"
+            abundance = (ROOT / "src" / "vulcan3" / "thermo"
                          / fastchem_abundance)
             if not abundance.is_file():
                 raise FileNotFoundError(f"no such abundance preset: {abundance}")

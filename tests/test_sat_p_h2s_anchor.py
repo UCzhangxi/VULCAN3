@@ -11,11 +11,11 @@ from __future__ import annotations
 
 import numpy as np
 
-from vulcan_jax.phy_const import ATM_CGS, BAR_CGS
+from vulcan3.phy_const import ATM_CGS, BAR_CGS
 
 
 def test_h2s_sat_p_hits_boiling_and_triple_points():
-    from vulcan_jax.atm_setup import compute_sat_p
+    from vulcan3.atm_setup import compute_sat_p
 
     T_boil = 212.8  # K, H2S normal boiling point (P = 1 atm)
     T_triple = 187.66  # K, H2S triple point (P ~ 0.233 bar)

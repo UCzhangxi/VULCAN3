@@ -27,17 +27,17 @@ warnings.filterwarnings("ignore")
 
 
 def _assert_testing_repo_checkout() -> None:
-    """Fail collection loudly if `import vulcan_jax` resolves outside this
+    """Fail collection loudly if `import vulcan3` resolves outside this
     repo: a non-editable install shadows the checkout and the suite silently
     tests stale code.
     """
-    import vulcan_jax
+    import vulcan3
 
-    pkg_path = Path(vulcan_jax.__file__).resolve()
-    expected = (ROOT / "src" / "vulcan_jax").resolve()
+    pkg_path = Path(vulcan3.__file__).resolve()
+    expected = (ROOT / "src" / "vulcan3").resolve()
     if not pkg_path.is_relative_to(expected):
         raise pytest.UsageError(
-            f"`import vulcan_jax` resolves to {pkg_path}, not this checkout "
+            f"`import vulcan3` resolves to {pkg_path}, not this checkout "
             f"({expected}). You are testing a stale installed copy, not the "
             "working tree. Fix with an editable install:\n"
             "    pip install -e . --no-deps"
@@ -64,7 +64,7 @@ def _cfg_snapshot_session():
     """Snapshot the process default config (a single object that
     `state._cfg_overlay` mutates in place) so `_cfg_guard` can restore it
     after every test."""
-    from vulcan_jax.config import default_config
+    from vulcan3.config import default_config
 
     canonical = default_config()
     snap = {"cfg": canonical, "attrs": copy.deepcopy(vars(canonical))}
@@ -104,10 +104,10 @@ def _release_jax_caches_per_module():
 
 
 def pytest_collection_modifyitems(config, items):
-    """The full-tier switch: `slow` tests skip unless VULCAN_JAX_RUN_SLOW=1."""
-    if os.environ.get("VULCAN_JAX_RUN_SLOW") == "1":
+    """The full-tier switch: `slow` tests skip unless VULCAN3_RUN_SLOW=1."""
+    if os.environ.get("VULCAN3_RUN_SLOW") == "1":
         return
-    skip = pytest.mark.skip(reason="full tier; set VULCAN_JAX_RUN_SLOW=1")
+    skip = pytest.mark.skip(reason="full tier; set VULCAN3_RUN_SLOW=1")
     for item in items:
         if "slow" in item.keywords:
             item.add_marker(skip)
@@ -126,9 +126,9 @@ class HD189State:
 @pytest.fixture(scope="session")
 def _hd189_pristine() -> HD189State:
     """One-time HD189 pre-loop build."""
-    import vulcan_jax.op_jax as op_jax
-    from vulcan_jax.config import default_config
-    from vulcan_jax.state import RunState, legacy_view
+    import vulcan3.op_jax as op_jax
+    from vulcan3.config import default_config
+    from vulcan3.state import RunState, legacy_view
 
     cfg = default_config()
     rs = RunState.with_pre_loop_setup(cfg)
@@ -187,11 +187,11 @@ def pytest_collection_finish():
         "Build them all with one command:\n"
         "    python tests/gen_fixtures.py --all\n"
         "(then `--verify` checks them against tests/data/FIXTURES.json).\n\n"
-        "VULCAN_JAX_ALLOW_MISSING_FIXTURES=1 accepts the reduced coverage. That "
+        "VULCAN3_ALLOW_MISSING_FIXTURES=1 accepts the reduced coverage. That "
         "is a DEVELOPER escape hatch: it must not be set in release CI, where "
         "the point is that these oracles ran."
     )
-    if os.environ.get("VULCAN_JAX_ALLOW_MISSING_FIXTURES") == "1":
+    if os.environ.get("VULCAN3_ALLOW_MISSING_FIXTURES") == "1":
         warnings.warn(msg, RuntimeWarning, stacklevel=1)
         return
     raise pytest.UsageError(msg)

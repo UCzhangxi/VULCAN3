@@ -14,9 +14,9 @@ GRAVITY_RTOL = 1e-13  # g recomputed from zco agrees to roundoff
 
 
 def test_refreshed_gravity_matches_refreshed_zco(hd189_state):
-    import vulcan_jax.legacy_io as op
-    import vulcan_jax.outer_loop as outer_loop
-    from vulcan_jax import atm_refresh
+    import vulcan3.legacy_io as op
+    import vulcan3.outer_loop as outer_loop
+    from vulcan3 import atm_refresh
 
     # Perturb ymix so mu, and with it zco, differ from the pre-loop profile.
     ymix = hd189_state.var.ymix

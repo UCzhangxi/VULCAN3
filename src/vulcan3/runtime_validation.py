@@ -1,4 +1,4 @@
-"""Pre-run configuration validation for the standalone VULCAN-JAX runtime."""
+"""Pre-run configuration validation for the standalone VULCAN3 runtime."""
 
 from __future__ import annotations
 
@@ -447,7 +447,7 @@ def validate_runtime_config(cfg) -> None:
     if bool(getattr(cfg, "use_ion", False)) and not bool(
         getattr(cfg, "use_photo", False)
     ):
-        errors.append("use_ion=True requires use_photo=True in VULCAN-JAX.")
+        errors.append("use_ion=True requires use_photo=True in VULCAN3.")
 
     fix_sp = list(getattr(cfg, "fix_species", []) or [])
     if fix_sp and not bool(getattr(cfg, "use_condense", False)):
@@ -462,8 +462,8 @@ def validate_runtime_config(cfg) -> None:
             errors.append(
                 f"fix_species entries not in the loaded network: {missing}. "
                 f"The network is import-locked, so this cannot be fixed after "
-                f"`import vulcan_jax`: either drop these entries or set "
-                f"$VULCAN_JAX_NETWORK to a network containing them before the "
+                f"`import vulcan3`: either drop these entries or set "
+                f"$VULCAN3_NETWORK to a network containing them before the "
                 f"first import."
             )
 
@@ -534,7 +534,7 @@ def validate_runtime_config(cfg) -> None:
 
     if errors:
         raise RuntimeError(
-            "Unsupported or invalid VULCAN-JAX runtime configuration:\n- "
+            "Unsupported or invalid VULCAN3 runtime configuration:\n- "
             + "\n- ".join(errors)
         )
 

@@ -520,8 +520,8 @@ def _assert_network_matches_import(cfg) -> None:
     """Fail fast if cfg requests a different network than the import-locked one.
 
     The network (``ni``/``nr``/``spec_list`` + codegen RHS) is parsed once at
-    the first ``import vulcan_jax``; select another with
-    ``$VULCAN_JAX_NETWORK`` before the first import (or the subprocess
+    the first ``import vulcan3``; select another with
+    ``$VULCAN3_NETWORK`` before the first import (or the subprocess
     driver). Compatibility means the same species names and reaction
     topology; a byte-identical copy at another path passes.
     """
@@ -552,8 +552,8 @@ def _assert_network_matches_import(cfg) -> None:
         return  # same species AND topology -> codegen RHS + metadata compatible
 
     raise ValueError(
-        "VULCAN-JAX reaction network is import-locked. It is parsed once at "
-        "the first `import vulcan_jax` and cannot be changed afterward.\n"
+        "VULCAN3 reaction network is import-locked. It is parsed once at "
+        "the first `import vulcan3` and cannot be changed afterward.\n"
         f"  import-time network : {have_path} "
         f"({import_net.ni} species, {import_net.nr} reactions)\n"
         f"  cfg.network requests: {want_path} "
@@ -562,8 +562,8 @@ def _assert_network_matches_import(cfg) -> None:
         "topology (order / stoichiometry) from the import-locked one, so its "
         "rates cannot be paired with the import-time codegen RHS. "
         "make_config(network=...) cannot hot-swap the network in-process. Set "
-        "the environment variable VULCAN_JAX_NETWORK to the desired network "
-        "path BEFORE the first `import vulcan_jax` (or use the subprocess driver)."
+        "the environment variable VULCAN3_NETWORK to the desired network "
+        "path BEFORE the first `import vulcan3` (or use the subprocess driver)."
     )
 
 
@@ -571,7 +571,7 @@ def _assert_com_file_matches_import(cfg) -> None:
     """Fail fast if cfg requests a different composition table than the locked one.
 
     The composition/mass table is read once into ``composition.py`` at the
-    first ``import vulcan_jax``, so a later ``make_config(com_file=...)``
+    first ``import vulcan3``, so a later ``make_config(com_file=...)``
     cannot change it; without this guard a missing or different table is
     silently ignored. A same-content copy at a different path is accepted.
     """
@@ -600,14 +600,14 @@ def _assert_com_file_matches_import(cfg) -> None:
         return
 
     raise ValueError(
-        "VULCAN-JAX composition table (com_file) is import-locked. It is loaded "
-        "once into composition.py at the first `import vulcan_jax` and cannot be "
+        "VULCAN3 composition table (com_file) is import-locked. It is loaded "
+        "once into composition.py at the first `import vulcan3` and cannot be "
         "changed afterward.\n"
         f"  import-time com_file : {have_r}\n"
         f"  cfg.com_file requests: {want_r}\n"
         "make_config(com_file=...) cannot change it in-process (and a missing "
         "file would otherwise be silently ignored). Set com_file in the config "
-        "used at the first `import vulcan_jax`."
+        "used at the first `import vulcan3`."
     )
 
 
@@ -615,7 +615,7 @@ def _assert_atom_list_matches_import(cfg) -> None:
     """Fail fast if cfg requests a different atom_list than the import-locked one.
 
     The reservoir-projection tables in ``jax_step`` are built once at the
-    first ``import vulcan_jax``, so a later ``make_config(atom_list=...)``
+    first ``import vulcan3``, so a later ``make_config(atom_list=...)``
     would mix the import-time projection with cfg-time atom accounting; this
     enforces the import-frozen contract instead of running the mix silently.
     """
@@ -626,12 +626,12 @@ def _assert_atom_list_matches_import(cfg) -> None:
     if tuple(cfg_atoms) == tuple(have):
         return
     raise ValueError(
-        "VULCAN-JAX atom_list is import-locked. The reservoir-projection tables "
-        "are built once at the first `import vulcan_jax`, so a later "
+        "VULCAN3 atom_list is import-locked. The reservoir-projection tables "
+        "are built once at the first `import vulcan3`, so a later "
         "make_config(atom_list=...) cannot change them.\n"
         f"  import-time atom_list : {list(have)}\n"
         f"  cfg.atom_list requests: {list(cfg_atoms)}\n"
-        "Set atom_list in the config used at the first `import vulcan_jax`."
+        "Set atom_list in the config used at the first `import vulcan3`."
     )
 
 

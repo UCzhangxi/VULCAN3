@@ -74,11 +74,11 @@ def main() -> int:
         sys.path.remove(str(VULCAN_MASTER))
     os.chdir(ROOT)
 
-    import vulcan_jax.network as net_mod
-    import vulcan_jax.chem as chem_mod
+    import vulcan3.network as net_mod
+    import vulcan3.chem as chem_mod
     import jax.numpy as jnp
 
-    from vulcan_jax._paths import resolve_data_path
+    from vulcan3._paths import resolve_data_path
 
     net = net_mod.parse_network(resolve_data_path(cfg_v.network))
     net_jax = chem_mod.to_jax(net)
@@ -96,7 +96,7 @@ def main() -> int:
     # Use the codegen path that the integrator actually runs. We build it
     # against `net` (parsed from cfg_v.network) so the test isn't sensitive
     # to JAX's default vulcan_cfg.network.
-    import vulcan_jax.make_chem_funs as mcf
+    import vulcan3.make_chem_funs as mcf
 
     chem_rhs_codegen = mcf.build_chem_rhs(net)
     dydt_jax = np.asarray(chem_rhs_codegen(y_j, M_j, k_j))

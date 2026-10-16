@@ -30,7 +30,7 @@ warnings.filterwarnings("ignore")
 
 def _cfg():
     """HD189 photo-off, non-hybrid, with the chemistry certificate opened up."""
-    import vulcan_jax.legacy_io as op
+    import vulcan3.legacy_io as op
 
     c = op.default_config()
     c.use_photo = False
@@ -83,11 +83,11 @@ def test_certificate_requires_the_column_element_budget(drain, scale, reason, wh
     the term is measured relative to H, so a common factor (the
     hydrostatic renormalisation) must still certify.
     """
-    import vulcan_jax
-    import vulcan_jax.legacy_io as op
-    from vulcan_jax import op_jax, outer_loop
-    from vulcan_jax.ini_abun import column_atoms
-    from vulcan_jax.state import RunState
+    import vulcan3
+    import vulcan3.legacy_io as op
+    from vulcan3 import op_jax, outer_loop
+    from vulcan3.ini_abun import column_atoms
+    from vulcan3.state import RunState
 
     c = _cfg()
     integ = outer_loop.OuterLoop(op_jax.Ros2JAX(), op.Output(cfg=c), cfg=c)
@@ -110,7 +110,7 @@ def test_certificate_requires_the_column_element_budget(drain, scale, reason, wh
     # The exported certificate (vulcan-forward's ConvDiag reads it) gives the
     # runner's own verdict on the exit carry; the tight branch, as yconv_cri
     # is opened.
-    ok, branch = vulcan_jax.conv_normal(final, c)
+    ok, branch = vulcan3.conv_normal(final, c)
     assert (bool(ok), int(branch)) == ((True, 1) if reason == 1 else (False, 0))
 
 
@@ -128,10 +128,10 @@ def test_a_geometry_refresh_alone_never_moves_the_budget(err_c, reason, why):
     discrete column."""
     import numpy as np
 
-    import vulcan_jax.legacy_io as op
-    from vulcan_jax import op_jax, outer_loop
-    from vulcan_jax.ini_abun import column_atoms
-    from vulcan_jax.state import RunState
+    import vulcan3.legacy_io as op
+    from vulcan3 import op_jax, outer_loop
+    from vulcan3.ini_abun import column_atoms
+    from vulcan3.state import RunState
 
     c = _cfg()
     c.geom_conv_tol = 1.0e9  # the geometry term is not under test here

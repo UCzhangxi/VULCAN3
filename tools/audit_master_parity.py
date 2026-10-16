@@ -127,8 +127,8 @@ def _runtime_files(root: Path) -> dict[Path, str]:
 
 def _compare_cfgs(master_cfg: Path) -> list[str]:
     """Compare master HD189 physics config against the JAX HD189 config (YAML)."""
-    from vulcan_jax.atm_setup import surface_gravity
-    from vulcan_jax.config import load_config
+    from vulcan3.atm_setup import surface_gravity
+    from vulcan3.config import load_config
 
     errors: list[str] = []
     master = _load_cfg(master_cfg)
@@ -167,7 +167,7 @@ def _compare_cfgs(master_cfg: Path) -> list[str]:
     # Master keys absent in JAX are drift, except config._REMOVED_KEYS (gs
     # among them: JAX derives it from Mp/Rp) and the display-only keys JAX
     # drops (config._IGNORED_KEYS).
-    from vulcan_jax.config import _IGNORED_KEYS, _REMOVED_KEYS
+    from vulcan3.config import _IGNORED_KEYS, _REMOVED_KEYS
 
     missing_in_jax = sorted(
         set(master) - set(jax) - UI_OUTPUT_KEYS - set(_REMOVED_KEYS)
@@ -417,7 +417,7 @@ def main(argv: list[str] | None = None) -> int:
     # Runtime data (atm/, thermo/) lives under the installed package, not the
     # repo root; the JAX config is loaded by name from configs/*.yaml. Default
     # to the package dir so no explicit --jax-root is needed.
-    from vulcan_jax._paths import PACKAGE_ROOT
+    from vulcan3._paths import PACKAGE_ROOT
 
     parser.add_argument(
         "--master",
@@ -430,7 +430,7 @@ def main(argv: list[str] | None = None) -> int:
         "--jax-root",
         type=Path,
         default=PACKAGE_ROOT,
-        help="Path to the VULCAN-JAX package dir (src/vulcan_jax).",
+        help="Path to the VULCAN-JAX package dir (src/vulcan3).",
     )
     args = parser.parse_args(argv)
 

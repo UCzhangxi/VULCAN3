@@ -23,7 +23,7 @@ import numpy as np
 import pytest
 
 from _helpers import relerr
-from vulcan_jax._paths import PACKAGE_ROOT
+from vulcan3._paths import PACKAGE_ROOT
 
 # (count_max, update_frq, diff_esc, rtol, ymix_min). Case 1: default HD189
 # for 20 steps over every cell, at the FP-accumulation floor (JAX and NumPy
@@ -210,7 +210,7 @@ master_npz = Path(sys.argv[6])
 os.chdir(jax_root)
 sys.path.insert(0, str(jax_root))
 
-from vulcan_jax.config import default_config
+from vulcan3.config import default_config
 vulcan_cfg = default_config()
 
 vulcan_cfg.count_max = count_max
@@ -224,24 +224,24 @@ vulcan_cfg.use_vm_mol = False
 vulcan_cfg.use_hybrid_vm_mol = False
 vulcan_cfg.use_print_prog = False
 
-from vulcan_jax.runtime_validation import validate_runtime_config
+from vulcan3.runtime_validation import validate_runtime_config
 
 validate_runtime_config(vulcan_cfg)
 
 # Seed from master's initial column (module docstring); everything after
 # ini_y derives from it.
-import vulcan_jax.ini_abun as _ini_abun
+import vulcan3.ini_abun as _ini_abun
 
 _MASTER_Y = np.asarray(
     np.load(master_npz, allow_pickle=True)["y_ini"], dtype=np.float64
 )
 _ini_abun._MODE_DISPATCH["EQ"] = lambda _atm: (_MASTER_Y.copy(), [])
 
-import vulcan_jax.chem_funs as chem_funs
-import vulcan_jax.legacy_io as op
-import vulcan_jax.op_jax as op_jax
-import vulcan_jax.outer_loop as outer_loop
-from vulcan_jax.state import RunState
+import vulcan3.chem_funs as chem_funs
+import vulcan3.legacy_io as op
+import vulcan3.op_jax as op_jax
+import vulcan3.outer_loop as outer_loop
+from vulcan3.state import RunState
 
 rs = RunState.with_pre_loop_setup(vulcan_cfg)
 rs_out = outer_loop.OuterLoop(op_jax.Ros2JAX(), op.Output())(rs)
@@ -589,20 +589,20 @@ package_root = Path(sys.argv[1])
 out_npz = Path(sys.argv[2])
 
 # `network` and `atom_list` are import-frozen: they must be selected before
-# the first `import vulcan_jax`, which is why the JAX side needs a cold process.
-os.environ["VULCAN_JAX_NETWORK"] = %(network)r
-os.environ["VULCAN_JAX_ATOM_LIST"] = "H,O,C"
+# the first `import vulcan3`, which is why the JAX side needs a cold process.
+os.environ["VULCAN3_NETWORK"] = %(network)r
+os.environ["VULCAN3_ATOM_LIST"] = "H,O,C"
 os.environ["JAX_PLATFORM_NAME"] = "cpu"
 sys.path.insert(0, str(package_root.parent))
 os.chdir(package_root)
 
-import vulcan_jax  # noqa: F401
-import vulcan_jax.chem_funs as chem_funs
-import vulcan_jax.legacy_io as op
-import vulcan_jax.op_jax as op_jax
-import vulcan_jax.outer_loop as outer_loop
-from vulcan_jax.config import default_config
-from vulcan_jax.state import RunState
+import vulcan3  # noqa: F401
+import vulcan3.chem_funs as chem_funs
+import vulcan3.legacy_io as op
+import vulcan3.op_jax as op_jax
+import vulcan3.outer_loop as outer_loop
+from vulcan3.config import default_config
+from vulcan3.state import RunState
 
 cfg = default_config()
 %(jax_cfg)s

@@ -25,7 +25,7 @@ def set_cfg(**overrides):
 
     conftest restores the config after every test, so no undo is needed.
     """
-    from vulcan_jax.config import default_config
+    from vulcan3.config import default_config
 
     cfg = default_config()
     for key, value in overrides.items():
@@ -39,9 +39,9 @@ def load_tpk_state():
 
     Partial setup: no rates, EQ seed or photo reads.
     """
-    from vulcan_jax.atm_setup import Atm
-    from vulcan_jax.config import default_config
-    from vulcan_jax.state import _AtmData, _Variables
+    from vulcan3.atm_setup import Atm
+    from vulcan3.config import default_config
+    from vulcan3.state import _AtmData, _Variables
 
     data_var = _Variables()
     data_atm = _AtmData()
@@ -81,8 +81,8 @@ def atom_count_matrix(net, atoms) -> np.ndarray:
 
     Read with an explicit encoding so species names come back as str.
     """
-    from vulcan_jax._paths import resolve_data_path
-    from vulcan_jax.config import default_config
+    from vulcan3._paths import resolve_data_path
+    from vulcan3.config import default_config
 
     compo = np.genfromtxt(
         resolve_data_path(default_config().com_file),
@@ -99,7 +99,7 @@ def atom_count_matrix(net, atoms) -> np.ndarray:
 
 def mass_for_gravity(g, rp):
     """Planet mass (g) that gives surface gravity `g` (cm/s^2) at radius `rp` (cm)."""
-    from vulcan_jax.phy_const import G_grav
+    from vulcan3.phy_const import G_grav
 
     return g * rp**2 / G_grav
 
@@ -112,7 +112,7 @@ def make_pco(P_b, P_t, nz):
 def tpk_cfg(**overrides):
     """Partial config for `atm_setup.load_TPK`: isothermal, constant Kzz, the
     HD189 radius and g = 2140 cm/s^2. `overrides` replace or add fields."""
-    from vulcan_jax._paths import PACKAGE_ROOT
+    from vulcan3._paths import PACKAGE_ROOT
 
     fields = dict(
         atm_type="isothermal",
@@ -139,15 +139,15 @@ def tpk_cfg(**overrides):
 def load_adj_state(fixture: str, cfg_name: str):
     """`(atm, net, y, k_arr)` of a saved converged state in `tests/data`.
 
-    The vulcan_jax imports are local so a child can select its network and
+    The vulcan3 imports are local so a child can select its network and
     atom list before the first import.
     """
     import jax.numpy as jnp
 
-    import vulcan_jax.chem as chem_mod
-    import vulcan_jax.network as net_mod
-    from vulcan_jax.config import load_config
-    from vulcan_jax.jax_step import AtmStatic
+    import vulcan3.chem as chem_mod
+    import vulcan3.network as net_mod
+    from vulcan3.config import load_config
+    from vulcan3.jax_step import AtmStatic
 
     d = np.load(ROOT / "tests" / "data" / fixture)
     atm = AtmStatic(**{
@@ -161,8 +161,8 @@ def load_adj_state(fixture: str, cfg_name: str):
 def run_self(test_file, *args, network: str, atom_list: str, cwd) -> None:
     """Re-run `test_file` as a single-threaded script with `network` and
     `atom_list` selected (both are import-frozen); assert a clean exit."""
-    env = dict(os.environ, VULCAN_JAX_NETWORK=network,
-               VULCAN_JAX_ATOM_LIST=atom_list, OMP_NUM_THREADS="1")
+    env = dict(os.environ, VULCAN3_NETWORK=network,
+               VULCAN3_ATOM_LIST=atom_list, OMP_NUM_THREADS="1")
     result = subprocess.run([sys.executable, str(Path(test_file).resolve()), *args],
                             cwd=cwd, env=env, text=True, capture_output=True,
                             timeout=SELF_RUN_TIMEOUT_S)
@@ -173,14 +173,14 @@ def run_child(child_src: str, *, network: str, label: str, timeout: int = 600):
     """Run `child_src` in a fresh CPU-only interpreter with `network` selected.
 
     A cold start is required: the network is import-frozen, so it can only be
-    chosen through the environment before `vulcan_jax` is first imported.
+    chosen through the environment before `vulcan3` is first imported.
     Asserts a clean exit and returns the CompletedProcess so the caller can
     make its own assertions about stdout.
     """
     env = {
         **os.environ,
         "JAX_PLATFORM_NAME": "cpu",
-        "VULCAN_JAX_NETWORK": network,
+        "VULCAN3_NETWORK": network,
     }
     res = subprocess.run(
         [sys.executable, "-c", child_src, str(ROOT)],

@@ -20,18 +20,18 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from vulcan_jax import atm_setup
-from vulcan_jax.atm_jax import (
+from vulcan3 import atm_setup
+from vulcan3.atm_jax import (
     AtmSpec,
     PhysicalInputs,
     build_atm_static,
     make_physical_inputs,
     pco_from_endpoints,
 )
-from vulcan_jax.atm_setup import analytical_TP_H14
-from vulcan_jax.composition import species as _SPECIES
-from vulcan_jax.jax_step import make_atm_static
-from vulcan_jax.phy_const import UNDERFLOW_DENOM
+from vulcan3.atm_setup import analytical_TP_H14
+from vulcan3.composition import species as _SPECIES
+from vulcan3.jax_step import make_atm_static
+from vulcan3.phy_const import UNDERFLOW_DENOM
 
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 
@@ -56,7 +56,7 @@ def _rel(a, b):
 
 def test_build_atm_static_matches_make_atm_static(hd189_state):
     """Integrated: every AtmStatic field equals the frozen production build."""
-    from vulcan_jax.config import default_config
+    from vulcan3.config import default_config
 
     cfg = default_config()
 
@@ -121,8 +121,8 @@ def _reference_vm_branch_vm(
     port the build_atm.py copy instead: it drops `axis=0`, a latent
     species-mixing bug that op.update_mu_dz overrides during the run.
     """
-    from vulcan_jax.atm_setup import _Dzz_gen_for_base
-    from vulcan_jax.phy_const import Navo, kb
+    from vulcan3.atm_setup import _Dzz_gen_for_base
+    from vulcan3.phy_const import Navo, kb
 
     Tco = np.asarray(Tco, np.float64)
     n_0 = np.asarray(n_0, np.float64)
@@ -184,7 +184,7 @@ def test_compute_mol_diff_vm_matches_vm_branch_reference():
 def test_vm_branch_differentiates_wrt_Tco():
     """Forward-mode tangent of the interface vm w.r.t. a Tco scale is finite and
     matches a central difference."""
-    from vulcan_jax.atm_jax import _mol_diff
+    from vulcan3.atm_jax import _mol_diff
 
     species_list, ms_arr, nz, ni, Tco, n_0, g, Hp, dz, alpha = (
         _synthetic_mol_diff_setup()
@@ -240,7 +240,7 @@ def test_vm_branch_differentiates_wrt_Tco():
 
 def test_jvp_dz_wrt_gs_matches_fd(hd189_state):
     """dz responds to surface gravity; jvp matches a central difference."""
-    from vulcan_jax.config import default_config
+    from vulcan3.config import default_config
 
     cfg = default_config()
 
@@ -262,7 +262,7 @@ def test_jvp_dz_wrt_gs_matches_fd(hd189_state):
 def test_jvp_M_Dzz_wrt_Tco_matches_fd(hd189_state):
     """Temperature is a differentiable leaf: scaling Tco moves M and Dzz and
     the jvp matches a central difference."""
-    from vulcan_jax.config import default_config
+    from vulcan3.config import default_config
 
     cfg = default_config()
 

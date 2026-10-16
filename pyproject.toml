@@ -5,9 +5,9 @@ requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "vulcan-jax"
+name = "vulcan3"
 dynamic = ["version"]
-description = "VULCAN-JAX: JAX-accelerated photochemical kinetics for exoplanet atmospheres"
+description = "VULCAN3: JAX-accelerated photochemical kinetics for exoplanet atmospheres"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "GPL-3.0-only"
@@ -18,7 +18,7 @@ dependencies = [
     "jax>=0.5.3",
     "numpy>=1.24",
     "scipy>=1.12",  # lgmres(rtol=...) for the reverse-mode steady-state adjoint
-    "PyYAML>=6",  # the config surface is YAML (vulcan_jax/configs/*.yaml)
+    "PyYAML>=6",  # the config surface is YAML (vulcan3/configs/*.yaml)
     # The ini_mix='EQ' Gibbs minimizer. Install it with --no-deps: its declared
     # extras (pyfastchem, xarray, thermochem, tqdm) are for parts of exogibbs
     # this package never touches, and pyfastchem has no aarch64 wheel.
@@ -36,8 +36,8 @@ classifiers = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/imalsky/jax-vulcan"
-Repository = "https://github.com/imalsky/jax-vulcan"
+Homepage = "https://github.com/imalsky/VULCAN3"
+Repository = "https://github.com/imalsky/VULCAN3"
 
 [project.optional-dependencies]
 dev = [
@@ -54,7 +54,7 @@ plot = [
 ]
 
 [project.scripts]
-vulcan-jax = "vulcan_jax.vulcan_jax_cli:cli_main"
+vulcan3 = "vulcan3.cli:cli_main"
 
 [tool.setuptools]
 package-dir = { "" = "src" }
@@ -64,20 +64,20 @@ include-package-data = false
 where = ["src"]
 
 [tool.setuptools.package-data]
-vulcan_jax = [
+vulcan3 = [
     "atm/**/*",
     "thermo/**/*",
     "configs/*.yaml",
 ]
 
 [tool.setuptools.exclude-package-data]
-vulcan_jax = [
+vulcan3 = [
     "**/__pycache__/**",
     "**/*.pyc",
 ]
 
 [tool.setuptools.dynamic]
-version = { attr = "vulcan_jax._version.__version__" }
+version = { attr = "vulcan3._version.__version__" }
 
 [tool.ruff.lint]
 select = ["E4", "E7", "E9", "F"]
@@ -85,7 +85,7 @@ select = ["E4", "E7", "E9", "F"]
 # These modules set sys.path / os.chdir / jax x64, or skip the module,
 # before their imports (E402).
 [tool.ruff.lint.per-file-ignores]
-"src/vulcan_jax/__init__.py" = ["E402"]
+"src/vulcan3/__init__.py" = ["E402"]
 "examples/grad_reverse_example.py" = ["E402"]
 "examples/grad_jvp_example.py" = ["E402"]
 "examples/grad_physical_example.py" = ["E402"]
@@ -93,4 +93,4 @@ select = ["E4", "E7", "E9", "F"]
 "tests/test_chem_rhs_codegen.py" = ["E402"]
 "tests/test_steady_state_reaction_sensitivity.py" = ["E402"]
 "tests/test_solver_fast.py" = ["E402"]
-"src/vulcan_jax/vulcan_jax_cli.py" = ["E402"]
+"src/vulcan3/cli.py" = ["E402"]

@@ -23,7 +23,7 @@ import jax
 jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp  # noqa: E402
 from _helpers import relerr  # noqa: E402
-from vulcan_jax.phy_const import UNDERFLOW_DENOM  # noqa: E402
+from vulcan3.phy_const import UNDERFLOW_DENOM  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 os.chdir(ROOT)
@@ -58,7 +58,7 @@ def _make_static(
     n_0=None,
     gas_indx_mask=None,
 ):
-    import vulcan_jax.conden as _conden_mod
+    import vulcan3.conden as _conden_mod
 
     if Dg_per_re is None:
         Dg_per_re = np.zeros((0, nz))
@@ -123,7 +123,7 @@ def test_update_conden_rates():
     """Scatter, sign split, and the use_relax short-circuit (coeff=0 gives
     an all-zero rate) over two condensation reactions.
     """
-    import vulcan_jax.conden as _conden_mod
+    import vulcan3.conden as _conden_mod
 
     rng = np.random.default_rng(42)
     nz, ni = 5, 4
@@ -172,7 +172,7 @@ def test_update_conden_rates():
 
 def test_apply_h2o_relax_jax():
     """Verify against a per-cell numpy implementation of op.h2o_conden_evap_relax."""
-    import vulcan_jax.conden as _conden_mod
+    import vulcan3.conden as _conden_mod
 
     rng = np.random.default_rng(7)
     nz, ni = 6, 3
@@ -240,7 +240,7 @@ def test_apply_h2o_relax_jax():
 def test_apply_nh3_relax_jax():
     """Match a per-cell numpy port of op.nh3_conden_evap_relax, including
     the conden_top clamp and the NH3_l_s >= 0 clip."""
-    import vulcan_jax.conden as _conden_mod
+    import vulcan3.conden as _conden_mod
 
     y, ymix, n_0, Dg, sat = _nh3_case(11)
     nz, ni = y.shape
@@ -301,7 +301,7 @@ def test_apply_nh3_relax_jax():
 def test_nh3_conden_top_traced_scalar_bitwise():
     """A 0-d int32 `nh3_conden_top` (the batched ProfileVars form) must be
     BITWISE identical to the Python-int closure form under jit."""
-    import vulcan_jax.conden as _conden_mod
+    import vulcan3.conden as _conden_mod
 
     y, ymix, n_0, Dg, sat = _nh3_case(11)
     nz, ni = y.shape
@@ -348,7 +348,7 @@ def test_nh3_conden_top_traced_scalar_bitwise():
 def test_nh3_conden_top_vmap_per_lane():
     """vmap over a batch where ONLY `nh3_conden_top` differs per lane must
     match per-lane single calls (the mechanism run_batch relies on)."""
-    import vulcan_jax.conden as _conden_mod
+    import vulcan3.conden as _conden_mod
 
     y, ymix, n_0, Dg, sat = _nh3_case(23)
     nz, ni = y.shape

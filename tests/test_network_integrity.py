@@ -38,7 +38,7 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 def _parse_quietly(net_rel_path: str):
-    from vulcan_jax import network as netmod
+    from vulcan3 import network as netmod
 
     with warnings.catch_warnings(record=True) as log:
         warnings.simplefilter("always")
@@ -49,7 +49,7 @@ def _parse_quietly(net_rel_path: str):
 
 def _configured_networks() -> list[str]:
     nets = set()
-    for cfg_path in sorted(glob.glob("src/vulcan_jax/configs/*.yaml")):
+    for cfg_path in sorted(glob.glob("src/vulcan3/configs/*.yaml")):
         with open(cfg_path) as fh:
             nets.add(yaml.safe_load(fh)["network"])
     return sorted(nets)
@@ -65,7 +65,7 @@ def test_configured_networks_have_no_duplicate_reactions(net_rel):
     assert not net.stale_ids, net.stale_ids
 
 
-_SHIPPED_NETWORKS = sorted(glob.glob("src/vulcan_jax/thermo/*network*.txt"))
+_SHIPPED_NETWORKS = sorted(glob.glob("src/vulcan3/thermo/*network*.txt"))
 
 
 @pytest.mark.parametrize("net_path", _SHIPPED_NETWORKS, ids=os.path.basename)
@@ -153,7 +153,7 @@ def test_photo_rate_index_is_positional_and_in_range(net_path):
 
 def test_stale_id_warning_fires_only_on_stale_rows():
     """A stale file must announce itself; a renumbered one must stay quiet."""
-    from vulcan_jax.legacy_io import _warn_stale_reaction_ids
+    from vulcan3.legacy_io import _warn_stale_reaction_ids
 
     with pytest.warns(RuntimeWarning, match="remove_list"):
         _warn_stale_reaction_ids("net.txt", [(781, 783, "H2O -> H + OH")])
@@ -164,7 +164,7 @@ def test_stale_id_warning_fires_only_on_stale_rows():
 
 def test_a_radiative_section_is_refused(tmp_path):
     """Every rate path zeroes a radiative slot, so the section must refuse."""
-    from vulcan_jax import network as netmod
+    from vulcan3 import network as netmod
 
     f = tmp_path / "net.txt"
     f.write_text("# two-body\n1  [ H + H -> H2 ]  1.0E-10  0.0  0.0\n# radiative\n")
@@ -174,7 +174,7 @@ def test_a_radiative_section_is_refused(tmp_path):
 
 def test_duplicate_reactions_refuse_naming_the_equations():
     """TiSNCHO's three upstream duplicates must refuse by default, warn on opt-in."""
-    from vulcan_jax import network as netmod
+    from vulcan3 import network as netmod
 
     with pytest.raises(ValueError, match="3 duplicated reaction"):
         netmod.parse_network("thermo/TiSNCHO_photo_network.txt")
@@ -201,7 +201,7 @@ def test_duplicate_reactions_refuse_naming_the_equations():
 )
 def test_temp_range_annotation_parser(annotation, expected):
     """Strict end-of-row scan: real ranges parse, garbled ones refuse."""
-    from vulcan_jax.network import _parse_temp_ranges
+    from vulcan3.network import _parse_temp_ranges
 
     assert _parse_temp_ranges(annotation.split()) == expected
 
@@ -220,7 +220,7 @@ def test_advisory_fires_per_profile_not_per_network(caplog, monkeypatch):
 
     The exposure depends on Tco, so the report is cached per profile, not per network.
     """
-    from vulcan_jax import runtime_validation as rv
+    from vulcan3 import runtime_validation as rv
 
     monkeypatch.setattr(rv, "_TEMP_RANGE_REPORTED", set())
     net, _ = _parse_quietly("thermo/NCHO_photo_network.txt")
@@ -235,12 +235,12 @@ def test_advisory_fires_per_profile_not_per_network(caplog, monkeypatch):
 @pytest.mark.parametrize("cfg_name", sorted(_EXPOSURE), ids=str)
 def test_shipped_profile_temp_range_exposure_is_pinned(cfg_name):
     """The out-of-range exposure of each shipped case is known and stays known."""
-    from vulcan_jax import runtime_validation as rv
+    from vulcan3 import runtime_validation as rv
 
-    with open(f"src/vulcan_jax/configs/{cfg_name}") as fh:
+    with open(f"src/vulcan3/configs/{cfg_name}") as fh:
         cfg = yaml.safe_load(fh)
     net, _ = _parse_quietly(cfg["network"])
-    prof = np.genfromtxt(f"src/vulcan_jax/{cfg['atm_file']}", names=True, skip_header=1)
+    prof = np.genfromtxt(f"src/vulcan3/{cfg['atm_file']}", names=True, skip_header=1)
     temp_col = next(n for n in prof.dtype.names if n.lower().startswith("temp"))
     exposure = rv.rate_temp_range_exposure(net, np.asarray(prof[temp_col], float))
     assert exposure == _EXPOSURE[cfg_name]
@@ -255,10 +255,10 @@ def test_network_species_without_composition_row_refuse():
     child = (
         "import os, sys, warnings; warnings.filterwarnings('ignore');"
         "os.environ['JAX_PLATFORM_NAME']='cpu';"
-        "os.environ['VULCAN_JAX_NETWORK']='thermo/SNCHO_photo_network_C3.txt';"
-        "os.environ['VULCAN_JAX_ATOM_LIST']='H,O,C,N,S';"
+        "os.environ['VULCAN3_NETWORK']='thermo/SNCHO_photo_network_C3.txt';"
+        "os.environ['VULCAN3_ATOM_LIST']='H,O,C,N,S';"
         f"sys.path.insert(0, {str(ROOT / 'src')!r});"
-        "from vulcan_jax import composition"
+        "from vulcan3 import composition"
     )
     proc = subprocess.run(
         [sys.executable, "-c", child], capture_output=True, text=True,

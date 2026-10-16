@@ -26,7 +26,7 @@ warnings.filterwarnings("ignore")
 
 
 def test_regrid_raises_Pb_to_first_cool_deep_level():
-    from vulcan_jax.atm_setup import high_temp_cut_regrid
+    from vulcan3.atm_setup import high_temp_cut_regrid
 
     nz = 150
     pco = make_pco(1e9, 1e-2, nz)  # pco[0] deepest
@@ -45,7 +45,7 @@ def test_regrid_raises_Pb_to_first_cool_deep_level():
 
 
 def test_regrid_floors_at_Pmin_when_all_deep_too_hot():
-    from vulcan_jax.atm_setup import high_temp_cut_regrid
+    from vulcan3.atm_setup import high_temp_cut_regrid
 
     nz = 100
     pco = make_pco(1e9, 1e-2, nz)
@@ -60,7 +60,7 @@ def test_regrid_floors_at_Pmin_when_all_deep_too_hot():
 )
 def test_regrid_noop(P_b, T):
     """No regrid when nothing exceeds T_max, or when P_b < P_min leaves no deep layer."""
-    from vulcan_jax.atm_setup import high_temp_cut_regrid
+    from vulcan3.atm_setup import high_temp_cut_regrid
 
     nz = 80
     pco = make_pco(P_b, 1e-2, nz)
@@ -84,7 +84,7 @@ def _write_hot_tp_file(path: Path) -> None:
 
 
 def test_end_to_end_file_mode_cut(tmp_path):
-    from vulcan_jax.atm_setup import compute_pico, high_temp_cut_regrid, load_TPK
+    from vulcan3.atm_setup import compute_pico, high_temp_cut_regrid, load_TPK
 
     atm_file = tmp_path / "hot_atm.txt"
     _write_hot_tp_file(atm_file)

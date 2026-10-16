@@ -66,7 +66,7 @@ def test_manifest_is_well_formed():
         assert spec.get("why", "").strip(), f"{family}: needs a reason"
     excluded = {n.upper() for n in m["not_in_this_release"]["networks"]}
     assert any("CRAHCNO" in n for n in excluded)
-    thermo = ROOT / "src" / "vulcan_jax" / "thermo"
+    thermo = ROOT / "src" / "vulcan3" / "thermo"
     bad = [q.name for q in thermo.glob("*")
            if "CRAHCNO" in q.name.upper() or "NCCN" in q.name.upper()]
     assert not bad, f"newer upstream network(s) present: {bad}"
@@ -84,7 +84,7 @@ def test_every_supported_input_exists_with_its_recorded_hash():
     import hashlib
 
     m = yaml.safe_load(MANIFEST.read_text())
-    pkg = ROOT / "src" / "vulcan_jax"
+    pkg = ROOT / "src" / "vulcan3"
     for rel, spec in m["supported_inputs"].items():
         p = pkg / rel
         assert p.is_file(), f"supported input missing: {rel}"
@@ -101,7 +101,7 @@ FASTCHEM_SLOT_ORDER = ["C", "H", "He", "N", "O", "P", "S", "Si", "Ti", "V",
 
 
 @pytest.mark.parametrize("preset", sorted(
-    (ROOT / "src" / "vulcan_jax" / "thermo").glob("solar_element_abundances*.dat")),
+    (ROOT / "src" / "vulcan3" / "thermo").glob("solar_element_abundances*.dat")),
     ids=lambda p: p.name)
 def test_abundance_presets_keep_fastchem_slot_order(preset):
     """tests/oracle.py stages these presets into upstream FastChem, which reads
@@ -121,7 +121,7 @@ def test_missing_oracle_dir_skips_locally_but_fails_in_release_ci(monkeypatch):
         orc.require_oracle("vulcan2_ncho")
     assert "VULCAN_MASTER_DIR" in str(exc.value)
 
-    # ...but a release CI job sets VULCAN_JAX_REQUIRE_ORACLE=1, where a
+    # ...but a release CI job sets VULCAN3_REQUIRE_ORACLE=1, where a
     # missing oracle must FAIL: skipped != passed.
     monkeypatch.setenv(orc.ENV_REQUIRE, "1")
     with pytest.raises(pytest.fail.Exception) as exc:

@@ -4,7 +4,7 @@ No shipped network carries an `# ionisation` section (upstream is the same),
 so this test synthesizes one at runtime: shipped NCHO + H2/H photoionisation,
 using only vendored data (ion cross-section columns, ion branch files, NASA9
 for H2_p/H_p/e, all_compose charge rows). The network is import-locked, so the
-activated network needs a fresh child process ($VULCAN_JAX_NETWORK).
+activated network needs a fresh child process ($VULCAN3_NETWORK).
 
 Checks: (A) setup wired the ion path (ion_sp, ion_rate_index, charge_list
 without `e`, non-zero cross_Jion); (B) both cations grow from zero, so
@@ -20,7 +20,7 @@ import pytest
 from _helpers import run_child
 
 ROOT = Path(__file__).resolve().parent.parent
-BASE_NETWORK = ROOT / "src" / "vulcan_jax" / "thermo" / "NCHO_photo_network.txt"
+BASE_NETWORK = ROOT / "src" / "vulcan3" / "thermo" / "NCHO_photo_network.txt"
 
 # Appended after the shipped NCHO photo section. The parser keys ion branches
 # off (species, branch_index) and pulls cross sections from {sp}_cross.csv
@@ -32,7 +32,7 @@ ION_SECTION = """
 """
 
 # Runs in a fresh interpreter so the import-locked network is the synthesized
-# ion network (selected via $VULCAN_JAX_NETWORK, inherited from the parent env).
+# ion network (selected via $VULCAN3_NETWORK, inherited from the parent env).
 _CHILD = r"""
 import os, sys, time, warnings
 warnings.filterwarnings("ignore")
@@ -41,8 +41,8 @@ from pathlib import Path
 repo = Path(sys.argv[1])
 sys.path.insert(0, str(repo / "src"))
 # cwd at the package root so relative data paths (cross_folder, sflux_file)
-# resolve; $VULCAN_JAX_NETWORK is absolute and resolves regardless.
-os.chdir(repo / "src" / "vulcan_jax")
+# resolve; $VULCAN3_NETWORK is absolute and resolves regardless.
+os.chdir(repo / "src" / "vulcan3")
 
 import numpy as np
 
@@ -50,7 +50,7 @@ import numpy as np
 # vulcan_cfg module carries the working HD189 photo defaults (r_star, orbit,
 # zenith angle, scattering, bin widths); we override only what we need. cfg is
 # mutated BEFORE the first jax_step/runner import so the values are seen. ---
-from vulcan_jax.config import default_config
+from vulcan3.config import default_config
 cfg = default_config()
 
 cfg.use_photo = True
@@ -76,14 +76,14 @@ cfg.ini_update_photo_frq = 20; cfg.final_update_photo_frq = 5
 cfg.use_print_prog = False
 
 # cfg is the process default config (mutated above); the runner/printer read it
-# via OuterLoop's default. The ion network was selected by $VULCAN_JAX_NETWORK
+# via OuterLoop's default. The ion network was selected by $VULCAN3_NETWORK
 # before the first import.
-import vulcan_jax.outer_loop as outer_loop
-import vulcan_jax.legacy_io as op
+import vulcan3.outer_loop as outer_loop
+import vulcan3.legacy_io as op
 
-import vulcan_jax.op_jax as op_jax
-from vulcan_jax.state import RunState
-from vulcan_jax.chem_funs import spec_list as SL
+import vulcan3.op_jax as op_jax
+from vulcan3.state import RunState
+from vulcan3.chem_funs import spec_list as SL
 
 
 def fail(msg):
@@ -176,7 +176,7 @@ print("PASS")
 def test_ion_chemistry_end_to_end(tmp_path):
     # Synthesize the activated ion network = shipped NCHO + an # ionisation
     # section. Written to pytest's tmp_path (auto-cleaned); the child imports it
-    # via the absolute $VULCAN_JAX_NETWORK path below.
+    # via the absolute $VULCAN3_NETWORK path below.
     ion_network = tmp_path / "NCHO_photo_ion_network.txt"
     ion_network.write_text(BASE_NETWORK.read_text().rstrip() + "\n" + ION_SECTION)
 

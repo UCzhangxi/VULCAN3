@@ -5,7 +5,7 @@ Under use_hybrid_vm_mol the body flips it to 0.0 when phase 0 ends
 (convergence, runtime or step count), as vm_branch op.py stop() does. The
 flip happens inside the single while_loop, so forward-mode jvp covers both
 phases. Non-hybrid runs never flip. The flip probe needs
-VULCAN_JAX_RUN_SLOW=1.
+VULCAN3_RUN_SLOW=1.
 """
 
 from __future__ import annotations
@@ -36,10 +36,10 @@ def _pin_cfg():
 
 
 def _run(vc, *, use_vm, hybrid, count_max):
-    import vulcan_jax.outer_loop as outer_loop
-    import vulcan_jax.legacy_io as op
-    import vulcan_jax.op_jax as op_jax
-    from vulcan_jax.state import RunState
+    import vulcan3.outer_loop as outer_loop
+    import vulcan3.legacy_io as op
+    import vulcan3.op_jax as op_jax
+    from vulcan3.state import RunState
 
     vc.use_vm_mol = bool(use_vm)
     vc.use_hybrid_vm_mol = bool(hybrid)
@@ -82,12 +82,12 @@ def test_returned_atm_carries_refreshed_zmco_and_vm():
     upstream's update_mu_dz refreshes in-loop: zmco from the refreshed zco
     (op.py:972-973) and, under use_vm_mol, vm from the refreshed g/Hpi/dzi
     (vm_branch op.py:945-992). Setup-time copies are the silent failure."""
-    import vulcan_jax.legacy_io as op
-    import vulcan_jax.op_jax as op_jax
-    import vulcan_jax.outer_loop as outer_loop
-    from vulcan_jax import phy_const as C
-    from vulcan_jax.atm_refresh import recompute_vm_jax
-    from vulcan_jax.state import RunState
+    import vulcan3.legacy_io as op
+    import vulcan3.op_jax as op_jax
+    import vulcan3.outer_loop as outer_loop
+    from vulcan3 import phy_const as C
+    from vulcan3.atm_refresh import recompute_vm_jax
+    from vulcan3.state import RunState
 
     vc = _pin_cfg()
     vc.use_vm_mol, vc.use_hybrid_vm_mol = True, False

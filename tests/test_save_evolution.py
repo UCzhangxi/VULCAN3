@@ -20,10 +20,10 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 def test_save_evolution_snapshots_and_vul_round_trip():
-    import vulcan_jax.legacy_io as legacy_io
-    import vulcan_jax.op_jax as op_jax
-    import vulcan_jax.outer_loop as outer_loop
-    from vulcan_jax.state import RunState
+    import vulcan3.legacy_io as legacy_io
+    import vulcan3.op_jax as op_jax
+    import vulcan3.outer_loop as outer_loop
+    from vulcan3.state import RunState
 
     save_evo_frq = 10
     count_max = 50

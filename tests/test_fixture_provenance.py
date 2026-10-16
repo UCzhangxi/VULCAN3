@@ -64,7 +64,7 @@ def test_fixture_manifest_verifies_and_records_provenance(tmp_path, monkeypatch)
     m = gen.write_manifest()
     assert set(m["fixtures"]) == set(gen.ALL_FIXTURES)
     assert gen.verify() == 0
-    assert "vulcan_jax_commit" in m
+    assert "vulcan3_commit" in m
     assert m["versions"]["jax"] and m["versions"]["numpy"]
     assert m["config_sha256_16"], "shipped config identity must be recorded"
     entry = m["fixtures"][gen.ALL_FIXTURES[0]]

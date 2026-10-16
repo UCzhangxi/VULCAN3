@@ -21,9 +21,9 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from vulcan_jax import jax_step
-from vulcan_jax.config import REPAIR_ABS_FLOOR
-from vulcan_jax.solver import (
+from vulcan3 import jax_step
+from vulcan3.config import REPAIR_ABS_FLOOR
+from vulcan3.solver import (
     factor_block_thomas_diag_offdiag,
     solve_block_thomas_diag_offdiag,
 )

@@ -33,9 +33,9 @@ def test_production_kernel_matches_reference(mode):
     import jax.numpy as jnp
 
     import diffusion_numpy_ref as diff_ref
-    import vulcan_jax.jax_step as jax_step
-    from vulcan_jax.config import default_config
-    from vulcan_jax.state import RunState, legacy_view
+    import vulcan3.jax_step as jax_step
+    from vulcan3.config import default_config
+    from vulcan3.state import RunState, legacy_view
 
     vulcan_cfg = default_config()
     # The NumPy reference's gravity mode is the CENTRAL scheme, and the vm case

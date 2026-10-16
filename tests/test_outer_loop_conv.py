@@ -23,8 +23,8 @@ MAX_ATOM_LOSS = 1.0e-8
 
 @pytest.mark.strict_isolation
 def test_count_capped_run_conv_ring_and_termination():
-    import vulcan_jax.outer_loop as outer_loop
-    import vulcan_jax.legacy_io as op
+    import vulcan3.outer_loop as outer_loop
+    import vulcan3.legacy_io as op
 
     vulcan_cfg = op.default_config()
 
@@ -37,8 +37,8 @@ def test_count_capped_run_conv_ring_and_termination():
     vulcan_cfg.use_hybrid_vm_mol = False
     vulcan_cfg.use_print_prog = False
 
-    import vulcan_jax.op_jax as op_jax
-    from vulcan_jax.state import RunState
+    import vulcan3.op_jax as op_jax
+    from vulcan3.state import RunState
 
     rs = RunState.with_pre_loop_setup(vulcan_cfg)
     integ = outer_loop.OuterLoop(op_jax.Ros2JAX(), op.Output())

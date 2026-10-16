@@ -78,7 +78,7 @@ def _check_static_against_fixture(
 @pytest.mark.skipif(not _BASELINE_FIXTURE.exists(), reason=_REGEN_HINT)
 def test_photo_setup_matches_baseline_fixture():
     """HD189 default: T_cross_sp=[], use_ion=False."""
-    import vulcan_jax.photo_setup as photo_setup
+    import vulcan3.photo_setup as photo_setup
 
     var, atm = build_state_through_read_rate()
     static = photo_setup._build_photo_static_dense(var, atm)
@@ -89,8 +89,8 @@ def test_photo_setup_matches_baseline_fixture():
 @pytest.mark.skipif(not _T_DEP_FIXTURE.exists(), reason=_REGEN_HINT)
 def test_photo_setup_matches_T_dep_fixture(monkeypatch):
     """HD189 with T_cross_sp=['CO2','H2O','NH3'] patched on."""
-    import vulcan_jax.photo_setup as photo_setup
-    from vulcan_jax.config import default_config
+    import vulcan3.photo_setup as photo_setup
+    from vulcan3.config import default_config
 
     vulcan_cfg = default_config()
 
@@ -113,7 +113,7 @@ def test_branch_key_order_is_deterministic():
     persistent compile cache write-only. Sortedness pins the invariant in one
     process; the failure it guards against only shows up across processes.
     """
-    import vulcan_jax.photo_setup as photo_setup
+    import vulcan3.photo_setup as photo_setup
 
     var, atm = build_state_through_read_rate()
     static = photo_setup._build_photo_static_dense(var, atm)

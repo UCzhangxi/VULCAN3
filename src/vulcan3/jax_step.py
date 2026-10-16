@@ -23,7 +23,7 @@ from .chem_funs import spec_list as _SPEC_LIST
 from .config import REPAIR_ABS_FLOOR, default_config
 from .phy_const import UNDERFLOW_DENOM, Navo, kb
 
-_SOLVER = os.environ.get("VULCAN_JAX_SOLVER", "fast")  # import-frozen: reference | fast | ffi
+_SOLVER = os.environ.get("VULCAN3_SOLVER", "fast")  # import-frozen: reference | fast | ffi
 if _SOLVER == "reference":
     from .solver import (
         factor_block_thomas_diag_offdiag,
