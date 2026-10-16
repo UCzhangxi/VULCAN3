@@ -3,7 +3,9 @@
 Master appends y/t every accepted step (op.py:1096-1099) and keeps every
 save_evo_frq-th. HD189 with count_max=50 and save_evo_frq=10 must give 6
 finite snapshots at increasing t, and the .vul must round-trip them under
-master's y_time/t_time keys (plot_py/plot_evolution.py).
+master's y_time/t_time keys (plot_py/plot_evolution.py). The chunked run the
+CLI uses (`integ(rs, chunk=N)`) must reproduce the one-loop run bit for bit:
+chunk boundaries fall between photolysis updates and snapshots.
 """
 
 from __future__ import annotations
@@ -18,10 +20,10 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 def test_save_evolution_snapshots_and_vul_round_trip():
-    import vulcan_jax.legacy_io as legacy_io
-    import vulcan_jax.op_jax as op_jax
-    import vulcan_jax.outer_loop as outer_loop
-    from vulcan_jax.state import RunState
+    import vulcan3.legacy_io as legacy_io
+    import vulcan3.op_jax as op_jax
+    import vulcan3.outer_loop as outer_loop
+    from vulcan3.state import RunState
 
     save_evo_frq = 10
     count_max = 50
@@ -35,9 +37,14 @@ def test_save_evolution_snapshots_and_vul_round_trip():
         count_min=1,
         use_print_prog=False,
     )
-    rs = RunState.with_pre_loop_setup(vulcan_cfg)
     output = legacy_io.Output()
-    rs_out = outer_loop.OuterLoop(op_jax.Ros2JAX(), output)(rs)
+    integ = outer_loop.OuterLoop(op_jax.Ros2JAX(), output)
+    rs_out = integ(RunState.with_pre_loop_setup(vulcan_cfg))
+    rs_chunked = integ(RunState.with_pre_loop_setup(vulcan_cfg), chunk=7)
+    assert int(rs_chunked.params.count) == int(rs_out.params.count)
+    for got, ref in ((rs_chunked.step.y, rs_out.step.y),
+                     (rs_chunked.step.y_evo, rs_out.step.y_evo)):
+        np.testing.assert_array_equal(np.asarray(got), np.asarray(ref))
 
     y_time = np.asarray(rs_out.step.y_evo)
     t_time = np.asarray(rs_out.step.t_evo)

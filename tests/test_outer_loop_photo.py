@@ -13,7 +13,7 @@ import copy
 
 import jax.numpy as jnp
 from _helpers import relerr
-from vulcan_jax.phy_const import UNDERFLOW_DENOM
+from vulcan3.phy_const import UNDERFLOW_DENOM
 
 
 PHOTO_RTOL = 1e-13
@@ -24,17 +24,17 @@ WRITER_RTOL = 1e-7
 
 
 def test_photo_branch_matches_python_photo_path():
-    from vulcan_jax.config import default_config
+    from vulcan3.config import default_config
 
     vulcan_cfg = default_config()
 
-    import vulcan_jax.legacy_io as op
-    import vulcan_jax.op_jax as op_jax
-    import vulcan_jax.outer_loop as outer_loop
-    from vulcan_jax.state import RunState, legacy_view, runstate_from_store
+    import vulcan3.legacy_io as op
+    import vulcan3.op_jax as op_jax
+    import vulcan3.outer_loop as outer_loop
+    from vulcan3.state import RunState, legacy_view, runstate_from_store
 
     # --- Build HD189 reference state with the photo pre-loop (as
-    # `vulcan_jax.py` does before entering the integration loop). ---
+    # `vulcan3.py` does before entering the integration loop). ---
     rs = RunState.with_pre_loop_setup(vulcan_cfg)
     data_var, data_atm, data_para = legacy_view(rs)
     output = op.Output()
@@ -42,7 +42,7 @@ def test_photo_branch_matches_python_photo_path():
     # with_pre_loop_setup already ran the photo pipeline once. Reset var.k_arr
     # to the post-rate-build, pre-photo values via setup_var_k, then re-run
     # Path A explicitly so there is a clean pre/post split.
-    import vulcan_jax.rates_jax as _rates_mod
+    import vulcan3.rates_jax as _rates_mod
 
     _network = _rates_mod.setup_var_k(vulcan_cfg, data_var, data_atm)
 

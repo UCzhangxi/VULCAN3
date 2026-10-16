@@ -1,13 +1,13 @@
-"""YAML-backed configuration for VULCAN-JAX.
+"""YAML-backed configuration for VULCAN3.
 
 The config surface is authored as YAML. Canonical configs ship inside the
-package (``vulcan_jax/configs/*.yaml``) and are overridable by a ``./configs/``
+package (``vulcan3/configs/*.yaml``) and are overridable by a ``./configs/``
 directory in the current working directory (CWD-first), so a run can be tuned
 locally without editing packaged files.
 
 ``load_config(name_or_path, **overrides)`` returns a ``Config`` read over the
 packaged ``default.yaml``; ``default_config()`` is the cached process-wide
-default, read at the first ``import vulcan_jax``.
+default, read at the first ``import vulcan3``.
 """
 
 from __future__ import annotations
@@ -17,6 +17,7 @@ import functools
 import os
 import re
 import types
+import warnings
 from importlib import resources
 from pathlib import Path
 from typing import Any
@@ -63,14 +64,23 @@ _StrictLoader.add_implicit_resolver(
     "tag:yaml.org,2002:float", _FLOAT_RE, list("-+0123456789.")
 )
 
-# Import-frozen knobs (read at the first `import vulcan_jax`): each honors an
+# Import-frozen knobs (read at the first `import vulcan3`): each honors an
 # environment override so a non-default network / atom set / composition can be
 # selected before import. `com_file` is overridable for symmetry.
 _FROZEN_ENV = {
-    "network": "VULCAN_JAX_NETWORK",
-    "atom_list": "VULCAN_JAX_ATOM_LIST",
-    "com_file": "VULCAN_JAX_COM_FILE",
+    "network": "VULCAN3_NETWORK",
+    "atom_list": "VULCAN3_ATOM_LIST",
+    "com_file": "VULCAN3_COM_FILE",
 }
+
+# The VULCAN_JAX_* variables are VULCAN3_* now; one still exported would be
+# ignored (a job asking for VULCAN_JAX_SOLVER=fast would run the default).
+_OLD_ENV = sorted(k for k in os.environ if k.startswith("VULCAN_JAX_"))
+if _OLD_ENV:
+    raise ImportError(
+        f"{_OLD_ENV} were renamed: use the VULCAN3_ prefix "
+        "(e.g. VULCAN3_SOLVER) in the environment or job script."
+    )
 
 # Largest step the Ros2 stage repair (jax_step._repair_stage) can resolve;
 # its correction system is as singular as the stage system by 1e17 s.
@@ -123,28 +133,40 @@ _REMOVED_KEYS: dict[str, str] = {
         ("use_pi_controller", "pi_controller_alpha", "pi_controller_beta"),
         "the master-faithful I-controller is the only dt control; remove the key",
     ),
-    **dict.fromkeys(
-        (
-            "plot_dir", "movie_dir", "plot_TP", "use_live_plot", "use_live_flux",
-            "use_plot_end", "use_plot_evo", "use_save_movie", "use_flux_movie",
-            "plot_height", "use_PIL", "live_plot_frq", "save_movie_rate",
-            "y_time_freq", "plot_spec",
-        ),
-        "VULCAN-JAX has no plotter or live UI; plot the `.vul` output with "
-        "VULCAN's plot_py/ scripts and remove the key",
-    ),
-    "print_prog_num": (
-        "`use_print_prog` prints one progress block at the end of the run; "
+    "use_allFC_ele": (
+        "the equilibrium seed carries only the network's own elements; "
         "remove the key"
     ),
-    "output_humanread": "the `.vul` output is always a pickle; remove the key",
-    "use_shark": "there is no end-of-run shark message; remove the key",
+    "wall_clock_max": (
+        "a run ends on the convergence certificate, `count_max` or `runtime`; "
+        "remove the key"
+    ),
+    "use_chunked_runner": (
+        "the CLI always runs in chunks of `print_prog_num` steps; from Python "
+        "call `integ(rs, chunk=N)`; remove the key"
+    ),
     "ode_solver": "Ros2 is the only solver; remove the key",
     "gibbs_text": (
         "reverse rates read thermo/NASA9/<species>.txt (gibbs.py); remove "
         "the key"
     ),
 }
+
+
+# Master's display-only keys (live plot, movies, text output). They change
+# nothing in a run, so a master-style config warns and drops them instead of
+# failing.
+_IGNORED_KEYS = frozenset((
+    "movie_dir", "plot_TP", "use_live_plot", "use_live_flux", "use_save_movie",
+    "use_flux_movie", "plot_height", "use_PIL", "live_plot_frq",
+    "save_movie_rate", "y_time_freq", "output_humanread", "use_shark",
+))
+
+
+# `<X>_H` elemental ratios: default.yaml declares the shipped elements; a
+# network carrying another element (P, Na, ...) reads its own `<X>_H`.
+# runtime_validation refuses a symbol the composition table does not have.
+_ELEMENT_RATIO_KEY = re.compile(r"[A-Z][a-z]?_H")
 
 
 @functools.cache
@@ -163,28 +185,46 @@ def _known_config_keys() -> frozenset[str]:
 def _packaged_defaults() -> dict[str, Any]:
     """The packaged ``default.yaml``, read raw once: the value of every knob a
     config file omits."""
-    pkg = resources.files("vulcan_jax").joinpath("configs", "default.yaml")
+    pkg = resources.files("vulcan3").joinpath("configs", "default.yaml")
     return yaml.load(pkg.read_text(), Loader=_StrictLoader)
 
 
-def _validate_keys(d: dict[str, Any], source: str) -> None:
-    """Reject removed or unknown config keys before they silently do nothing."""
+def _validate_keys(d: dict[str, Any], source: str) -> list[str]:
+    """Reject removed or unknown config keys before they silently do nothing;
+    warn about display-only keys and return them for the caller to drop."""
     removed = sorted(k for k in d if k in _REMOVED_KEYS)
     if removed:
         detail = "; ".join(f"`{k}` -- {_REMOVED_KEYS[k]}" for k in removed)
         raise ValueError(f"{source}: uses removed config key(s): {detail}.")
-    unknown = sorted(set(d) - _known_config_keys())
+    ignored = sorted(k for k in d if k in _IGNORED_KEYS)
+    if ignored:
+        warnings.warn(
+            f"{source}: ignoring display-only key(s) {ignored}; VULCAN3 has "
+            "no live plot, movie or text output.",
+            stacklevel=3,
+        )
+    unknown = sorted(
+        k for k in set(d) - _known_config_keys() - _IGNORED_KEYS
+        if not _ELEMENT_RATIO_KEY.fullmatch(k)
+    )
     if unknown:
         raise ValueError(
             f"{source}: unknown config key(s) {unknown}. Every knob is declared in "
-            "vulcan_jax/configs/default.yaml -- check for a typo or a renamed knob."
+            "vulcan3/configs/default.yaml -- check for a typo or a renamed knob."
         )
+    return ignored
 
 
 def validate_overrides(overrides: dict[str, Any]) -> None:
     """Refuse removed or unknown keys in an override dict, as
     ``load_config(**overrides)`` does, for a caller that applies the dict to a
-    loaded Config with ``setattr`` (which checks nothing)."""
+    loaded Config with ``setattr`` (which checks nothing). Display-only keys
+    are refused here: setattr would apply them, and code has no reason to
+    pass one."""
+    ignored = sorted(set(overrides) & _IGNORED_KEYS)
+    if ignored:
+        raise ValueError(f"config overrides: display-only key(s) {ignored} do "
+                         "nothing in VULCAN3; remove them.")
     _validate_keys(overrides, "config overrides")
 
 
@@ -204,7 +244,7 @@ def _read_text(name_or_path: str | os.PathLike) -> str:
 
     Resolution order: an explicit path or ``*.yaml``/``*.yml`` file; else a bare
     name resolved CWD-first (``./configs/<name>.yaml``) then from the packaged
-    ``vulcan_jax/configs/<name>.yaml``.
+    ``vulcan3/configs/<name>.yaml``.
     """
     p = Path(name_or_path)
     if p.suffix in (".yaml", ".yml") or p.exists():
@@ -217,18 +257,18 @@ def _read_text(name_or_path: str | os.PathLike) -> str:
     if cwd.is_file():
         return cwd.read_text()
 
-    pkg = resources.files("vulcan_jax").joinpath("configs", fname)
+    pkg = resources.files("vulcan3").joinpath("configs", fname)
     if pkg.is_file():
         return pkg.read_text()
 
     raise FileNotFoundError(
         f"no config named {name_or_path!r}: looked for ./configs/{fname} and "
-        f"the packaged vulcan_jax/configs/{fname}."
+        f"the packaged vulcan3/configs/{fname}."
     )
 
 
 def _apply_frozen_env(d: dict[str, Any]) -> None:
-    """Overlay the import-frozen knobs from ``$VULCAN_JAX_*`` (env wins)."""
+    """Overlay the import-frozen knobs from ``$VULCAN3_*`` (env wins)."""
     for key, env in _FROZEN_ENV.items():
         val = os.environ.get(env)
         if val is None:
@@ -270,7 +310,8 @@ def load_config(
     d: dict[str, Any] = {**copy.deepcopy(_packaged_defaults()), **raw}
     _apply_frozen_env(d)
     d.update(overrides)
-    _validate_keys(d, f"config {name_or_path!r}")
+    for key in _validate_keys(d, f"config {name_or_path!r}"):
+        del d[key]
     _resolve_derived(d)
     return Config(**d)
 
@@ -293,8 +334,8 @@ def dump_config(cfg: Config, path: str | os.PathLike) -> None:
 def default_config() -> Config:
     """The process-wide default Config (loaded once from ``configs/default.yaml``).
 
-    Resolves the import-frozen knobs, folding any ``$VULCAN_JAX_*`` overrides,
-    at the first ``import vulcan_jax``. Cached: the
+    Resolves the import-frozen knobs, folding any ``$VULCAN3_*`` overrides,
+    at the first ``import vulcan3``. Cached: the
     same object is returned every call, so ``state._cfg_overlay`` can identity-
     compare against it for its no-op fast path.
     """

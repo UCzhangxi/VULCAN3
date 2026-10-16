@@ -5,7 +5,7 @@ Two layers:
   deflation); no converged column needed.
 * A slow HD189 fixture regression running the full adjoint against the
   documented finite-difference anchors; pays a ~10-20 min cold compile, so
-  it is skipped unless `VULCAN_JAX_RUN_SLOW=1`.
+  it is skipped unless `VULCAN3_RUN_SLOW=1`.
 
 The fast tests cannot cover end-to-end correctness: `jax_ros2_step` uses
 import-baked atom-projection tables sized for the active network.
@@ -22,7 +22,7 @@ import pytest
 
 jax.config.update("jax_enable_x64", True)
 
-from vulcan_jax.steady_state_grad import (
+from vulcan3.steady_state_grad import (
     steady_state_reaction_sensitivity,
     _safe_inv_y,
     _conserved_null_basis,
@@ -124,7 +124,7 @@ def test_poor_convergence_warns():
     when the caller never inspects `info`; a good solve is silent."""
     import warnings as _w
 
-    from vulcan_jax.steady_state_grad import _warn_poor_convergence
+    from vulcan3.steady_state_grad import _warn_poor_convergence
 
     with pytest.warns(UserWarning, match="stagnation"):
         _warn_poor_convergence(0.5, 0.0)
@@ -167,8 +167,8 @@ def test_hd189_reaction_sensitivity_regression():
     converged photo-off state. Sign and top-6 ranking are the strongest
     assertions.
     """
-    import vulcan_jax.chem_funs as chem_funs
-    from vulcan_jax.jax_step import AtmStatic
+    import vulcan3.chem_funs as chem_funs
+    from vulcan3.jax_step import AtmStatic
 
     d = np.load(HD189_FIXTURE, allow_pickle=True)
     nz = int(d["nz"])

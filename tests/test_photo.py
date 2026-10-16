@@ -27,17 +27,17 @@ def main() -> int:
     os.chdir(VULCAN_MASTER)
     sys.path.append(str(VULCAN_MASTER))
     import jax.numpy as jnp
-    from vulcan_jax.config import default_config
+    from vulcan3.config import default_config
 
     vulcan_cfg = default_config()
-    from vulcan_jax.atm_setup import Atm
-    from vulcan_jax.ini_abun import InitialAbun
+    from vulcan3.atm_setup import Atm
+    from vulcan3.ini_abun import InitialAbun
     import op
-    import vulcan_jax.photo as photo_mod
+    import vulcan3.photo as photo_mod
 
     # Private containers on purpose: master's pipeline must mutate a shared
     # (var, atm) that the JAX side then reads (var.cross[sp] etc.).
-    from vulcan_jax.state import _Variables, _AtmData
+    from vulcan3.state import _Variables, _AtmData
 
     # === Set up state with photochemistry ===
     data_var = _Variables()
@@ -69,14 +69,14 @@ def main() -> int:
 
     # === Pack photo data and run JAX version ===
     os.chdir(ROOT)
-    import vulcan_jax.chem_funs as chem_funs
+    import vulcan3.chem_funs as chem_funs
 
     species_list = chem_funs.spec_list
 
     # Build the dense `PhotoStaticInputs` and derive the runtime
     # `PhotoData` from it; master's `make_bins_read_cross` above already
     # populated the dicts master's compute_tau needs.
-    import vulcan_jax.photo_setup as photo_setup
+    import vulcan3.photo_setup as photo_setup
 
     static = photo_setup._build_photo_static_dense(data_var, data_atm)
     static = static.with_din12_indx(int(data_var.sflux_din12_indx))
@@ -112,7 +112,7 @@ def main() -> int:
     data_var.ymix = data_var.y / np.vstack(np.sum(data_var.y, axis=1))
     solver_v.compute_flux(data_var, data_atm)
     aflux_ref = data_var.aflux.copy()
-    from vulcan_jax.phy_const import hc
+    from vulcan3.phy_const import hc
 
     # Master's op.compute_flux reads sl_angle/edd from its OWN vulcan_cfg
     # (both ship 48 deg for HD189; 83 deg is W39b's value); feed the JAX kernel

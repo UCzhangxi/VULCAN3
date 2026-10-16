@@ -27,7 +27,7 @@ def build_state_through_read_rate():
     """Return (var, atm) after the pre-photo setup and ReadRate, in the legacy
     containers: `photo_setup._build_photo_static_dense` reads dict attrs that
     `legacy_io.ReadRate.read_rate` writes onto `var`."""
-    import vulcan_jax.legacy_io as op
+    import vulcan3.legacy_io as op
     from _helpers import load_tpk_state
 
     var, atm, _ = load_tpk_state()
@@ -58,8 +58,8 @@ def _static_to_npz_dict(static) -> dict:
 
 
 def main() -> int:
-    import vulcan_jax.photo_setup as photo_setup
-    from vulcan_jax.config import default_config
+    import vulcan3.photo_setup as photo_setup
+    from vulcan3.config import default_config
 
     vulcan_cfg = default_config()
 

@@ -1,4 +1,4 @@
-"""YAML config loader (`vulcan_jax.config`).
+"""YAML config loader (`vulcan3.config`).
 
 Covers derived-value resolution, gravity from Mp/Rp, the CWD-first override,
 env-frozen knobs, caller overrides and the dt_max cap.
@@ -11,8 +11,8 @@ import textwrap
 import pytest
 import yaml
 
-from vulcan_jax.atm_setup import surface_gravity
-from vulcan_jax.config import (
+from vulcan3.atm_setup import surface_gravity
+from vulcan3.config import (
     _DT_MAX_RUNTIME_FRAC,
     DT_MAX_S,
     Config,
@@ -38,7 +38,7 @@ def test_expected_gs_covers_every_shipped_config():
     `_EXPECTED_GS` is hand-maintained; without this check a new
     `configs/*.yaml` would go untested by every parametrized test below.
     """
-    from vulcan_jax._paths import PACKAGE_ROOT
+    from vulcan3._paths import PACKAGE_ROOT
 
     shipped = {p.stem for p in (PACKAGE_ROOT / "configs").glob("*.yaml")}
     assert shipped == set(_EXPECTED_GS), (
@@ -138,9 +138,9 @@ def test_loader_refuses_bad_input(tmp_path, monkeypatch):
 
 
 def test_frozen_env_overrides_yaml(monkeypatch):
-    """$VULCAN_JAX_* select the import-frozen knobs over the YAML values."""
-    monkeypatch.setenv("VULCAN_JAX_ATOM_LIST", "H,O,C,N,S")
-    monkeypatch.setenv("VULCAN_JAX_NETWORK", "thermo/SNCHO_photo_network.txt")
+    """$VULCAN3_* select the import-frozen knobs over the YAML values."""
+    monkeypatch.setenv("VULCAN3_ATOM_LIST", "H,O,C,N,S")
+    monkeypatch.setenv("VULCAN3_NETWORK", "thermo/SNCHO_photo_network.txt")
     cfg = load_config("default")
     assert cfg.atom_list == ["H", "O", "C", "N", "S"]
     assert cfg.network == "thermo/SNCHO_photo_network.txt"
@@ -149,7 +149,7 @@ def test_frozen_env_overrides_yaml(monkeypatch):
 def test_dt_max_is_capped_where_the_stage_repair_is_resolvable():
     """Derived dt_max saturates at DT_MAX_S; an explicit larger value is refused
     at OuterLoop construction (the Ros2 stage repair is unresolvable there)."""
-    from vulcan_jax.outer_loop import OuterLoop
+    from vulcan3.outer_loop import OuterLoop
 
     assert load_config("default").dt_max == DT_MAX_S == 1.0e15
     assert load_config("default", runtime=1e18).dt_max == 1.0e13

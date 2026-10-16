@@ -107,11 +107,14 @@ PYEOF
 
   # ---------------- VULCAN-JAX 3.0, fresh subprocess + empty XLA cache (Table 1's protocol)
   J="$OUT/jax_$P"; mkdir -p "$J"
+  # One chunk: the CLI otherwise syncs and prints every print_prog_num steps,
+  # and Table 1 times the uninterrupted loop.
+  { cat "$JAX_REPO/src/vulcan3/configs/$P.yaml"; echo "print_prog_num: 1000000000"; } > "$J/$P.yaml"
   read -r j_real j_user j_sys < <(cd "$J" && \
     JAX_COMPILATION_CACHE_DIR="$J/xlacache" \
-    VULCAN_JAX_NETWORK="$JAX_REPO/src/vulcan_jax/$(net_for "$P")" \
-    VULCAN_JAX_ATOM_LIST="$(atoms_for "$P")" \
-    timed "$J/run.log" "$PY" -m vulcan_jax.vulcan_jax_cli --config "$P")
+    VULCAN3_NETWORK="$JAX_REPO/src/vulcan3/$(net_for "$P")" \
+    VULCAN3_ATOM_LIST="$(atoms_for "$P")" \
+    timed "$J/run.log" "$PY" -m vulcan3.cli --config "$J/$P.yaml")
   j_steps=$(grep -oE 'successfully run to steady-state with [0-9]+ steps' "$J/run.log" | grep -oE '[0-9]+' | head -1)
   j_ratio=$(awk "BEGIN{printf \"%.2f\", ($j_user+$j_sys)/$j_real}")
   printf '%-8s %-12s %8s %8s %8s %9s %7s\n' "$P" "VULCAN-JAX" "$j_real" "$j_user" "$j_sys" "$j_ratio" "${j_steps:-?}" | tee -a "$OUT/summary.txt"

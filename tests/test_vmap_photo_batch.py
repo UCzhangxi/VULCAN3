@@ -61,7 +61,7 @@ def _scale_ratio(bat, sol, other):
 
 @pytest.mark.strict_isolation
 def test_photo_lane_matches_its_solo_run():
-    import vulcan_jax.outer_loop as outer_loop
+    import vulcan3.outer_loop as outer_loop
 
     vulcan_cfg = _pin_cfg()
 
@@ -137,7 +137,7 @@ def test_lane_gone_nonfinite_on_a_photo_tick_keeps_its_whole_carry():
     """
     import jax
     import jax.numpy as jnp
-    from vulcan_jax import outer_loop
+    from vulcan3 import outer_loop
 
     vulcan_cfg = _pin_cfg()
     integ = _build_integ()
@@ -191,7 +191,7 @@ def test_queue_on_photo_lanes_matches_the_batch():
     refilled lane left on its predecessor's RT state would integrate a
     different column.
     """
-    from vulcan_jax import outer_loop
+    from vulcan3 import outer_loop
 
     vulcan_cfg = _pin_cfg()
     integ = _build_integ()
@@ -240,7 +240,7 @@ def test_refill_on_a_photo_tick_applies_photolysis_once():
     are bitwise equal. A second application at the refill moves prev_aflux
     and aflux_change, and aflux_change gates the convergence certificate.
     """
-    from vulcan_jax import outer_loop
+    from vulcan3 import outer_loop
 
     vulcan_cfg = _pin_cfg(ini_update_photo_frq=1, final_update_photo_frq=1,
                           update_frq=1)

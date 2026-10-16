@@ -1,4 +1,4 @@
-"""Smoke-test the production console entry point `vulcan_jax_cli.cli_main`.
+"""Smoke-test the production console entry point `cli.cli_main`.
 
 The console entry point, run end to end on HD189 with a tiny step cap,
 writes a schema-correct `.vul`.
@@ -24,8 +24,8 @@ warnings.filterwarnings("ignore")
 
 @pytest.mark.strict_isolation
 def test_cli_main_produces_vul():
-    from vulcan_jax.config import dump_config, load_config
-    import vulcan_jax.vulcan_jax_cli as cli
+    from vulcan3.config import dump_config, load_config
+    import vulcan3.cli as cli
 
     overrides = {
         "count_max": 3,
@@ -70,8 +70,8 @@ def test_frozen_knob_mismatch_flags_only_non_default_networks():
     A false negative silently runs a config against the wrong network; a false
     positive sends the CLI into a relaunch it cannot resolve.
     """
-    from vulcan_jax.config import load_config
-    import vulcan_jax.vulcan_jax_cli as cli
+    from vulcan3.config import load_config
+    import vulcan3.cli as cli
 
     # Same NCHO network as the import-frozen default -> no relaunch.
     for name in ("default", "HD189", "HD209"):
@@ -80,8 +80,8 @@ def test_frozen_knob_mismatch_flags_only_non_default_networks():
     # Sulfur networks differ in both network and atom_list.
     w39b = cli._frozen_knob_mismatch(load_config("W39b"))
     assert w39b == {
-        "VULCAN_JAX_NETWORK": "thermo/SNCHO_photo_network.txt",
-        "VULCAN_JAX_ATOM_LIST": "H,O,C,N,S",
+        "VULCAN3_NETWORK": "thermo/SNCHO_photo_network.txt",
+        "VULCAN3_ATOM_LIST": "H,O,C,N,S",
     }
 
     # A knob that is not import-frozen must never trigger a relaunch.
@@ -90,8 +90,8 @@ def test_frozen_knob_mismatch_flags_only_non_default_networks():
 
 def test_relaunch_sets_env_and_refuses_to_loop(monkeypatch):
     """The relaunch passes the mismatch through the env and re-runs the config."""
-    from vulcan_jax.config import load_config
-    import vulcan_jax.vulcan_jax_cli as cli
+    from vulcan3.config import load_config
+    import vulcan3.cli as cli
 
     captured = {}
 
@@ -105,8 +105,8 @@ def test_relaunch_sets_env_and_refuses_to_loop(monkeypatch):
     with pytest.raises(SystemExit):
         cli._relaunch_for_frozen_knobs(load_config("W39b"), "W39b")
 
-    assert captured["env"]["VULCAN_JAX_NETWORK"] == "thermo/SNCHO_photo_network.txt"
-    assert captured["env"]["VULCAN_JAX_ATOM_LIST"] == "H,O,C,N,S"
+    assert captured["env"]["VULCAN3_NETWORK"] == "thermo/SNCHO_photo_network.txt"
+    assert captured["env"]["VULCAN3_ATOM_LIST"] == "H,O,C,N,S"
     assert captured["env"][cli._RELAUNCH_GUARD] == "1"
     assert captured["argv"][-2:] == ["--config", "W39b"]
 

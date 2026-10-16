@@ -32,15 +32,15 @@ def main() -> int:
     sys.path.insert(0, str(VULCAN_MASTER))
     import jax.numpy as jnp
 
-    from vulcan_jax.config import default_config
+    from vulcan3.config import default_config
 
     vulcan_cfg = default_config()
     import store, op  # noqa
-    from vulcan_jax.atm_setup import Atm
+    from vulcan3.atm_setup import Atm
 
-    import vulcan_jax.network as net_mod
-    import vulcan_jax.rates_jax as rates_jax
-    import vulcan_jax.gibbs as gibbs_mod
+    import vulcan3.network as net_mod
+    import vulcan3.rates_jax as rates_jax
+    import vulcan3.gibbs as gibbs_mod
 
     # === 1. VULCAN setup (build atm + read forward + reverse rates) ===
     data_var = store.Variables()

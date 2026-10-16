@@ -18,12 +18,12 @@ RTOL = 1e-12  # the same rate expression evaluated two ways
 
 
 def test_rate_build_tangents_are_finite(hd189_state):
-    from vulcan_jax.config import default_config
+    from vulcan3.config import default_config
 
     vulcan_cfg = default_config()
-    from vulcan_jax import network as net_mod, rates_jax
-    from vulcan_jax.gibbs import load_nasa9
-    from vulcan_jax._paths import resolve_data_path
+    from vulcan3 import network as net_mod, rates_jax
+    from vulcan3.gibbs import load_nasa9
+    from vulcan3._paths import resolve_data_path
 
     atm = hd189_state.atm
     network = net_mod.parse_network(str(resolve_data_path(vulcan_cfg.network)))
@@ -108,7 +108,7 @@ def test_troe_oh_ch3_is_visscher_moses_eq14(T, Pr):
     width; upstream op.py:204-205 uses ln) with the eq 24-26 fits. The only
     guard against a transcription error: the oracle comparison carries the
     same declared correction on its side."""
-    from vulcan_jax import rates_jax
+    from vulcan3 import rates_jax
 
     k0 = 1.932e3 * T**-9.88 * np.exp(-7544.0 / T) + 5.109e-11 * T**-6.25 * np.exp(
         -1433.0 / T
@@ -127,10 +127,10 @@ def test_lindemann_with_zero_k_inf_is_the_zero_rate_limit():
     exactly 0, with a finite tangent, not the guard value's low-pressure
     `arr / (1 + arr*M)`. A mis-shaped M raises instead of broadcasting the
     bottom layer's density over the column."""
-    from vulcan_jax import network as net_mod
-    from vulcan_jax import rates_jax
-    from vulcan_jax._paths import resolve_data_path
-    from vulcan_jax.config import default_config
+    from vulcan3 import network as net_mod
+    from vulcan3 import rates_jax
+    from vulcan3._paths import resolve_data_path
+    from vulcan3.config import default_config
 
     net = net_mod.parse_network(str(resolve_data_path(default_config().network)))
     falloff = np.logical_and(

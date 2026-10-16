@@ -13,7 +13,7 @@ jax.config.update("jax_enable_x64", True)
 def test_diffusion_ysum_zero_layer():
     """Diffusion terms must be finite when a layer has ysum=0 and when
     molecular diffusion is off (Dzz=0, Hpi=0), where 0 * inf would give NaN."""
-    from vulcan_jax.jax_step import AtmStatic, _build_diff_coeffs_jax, compute_diff_grav
+    from vulcan3.jax_step import AtmStatic, _build_diff_coeffs_jax, compute_diff_grav
 
     nz, ni = 8, 4
     rng = np.random.default_rng(99)
@@ -57,7 +57,7 @@ def test_diffusion_ysum_zero_layer():
 
 def test_atm_refresh_mu_zero_layer():
     """Scale-height computation must be finite even when mu=0 in a layer."""
-    from vulcan_jax.atm_refresh import AtmRefreshStatic, update_mu_dz_jax
+    from vulcan3.atm_refresh import AtmRefreshStatic, update_mu_dz_jax
 
     nz, ni = 8, 4
     rng = np.random.default_rng(42)

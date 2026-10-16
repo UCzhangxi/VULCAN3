@@ -3,7 +3,7 @@
 The default NCHO network has no condensate species, so the curated suite never
 exercises the assembled condensation runtime path. The network is
 import-locked, so the child selects `SNCHO_photo_network_2025.txt` (the one
-vendored network with both `H2O_l_s` and `S8_l_s`) via `$VULCAN_JAX_NETWORK`.
+vendored network with both `H2O_l_s` and `S8_l_s`) via `$VULCAN3_NETWORK`.
 Self-contained: isothermal TP + const_mix init, no photo, no EQ seed.
 
 Checks: (1) settling velocities are downward for each condensate column and
@@ -24,19 +24,19 @@ warnings.filterwarnings("ignore")
 
 from pathlib import Path
 repo = Path(sys.argv[1])
-sys.path.insert(0, str(repo / "src"))        # resolve `import vulcan_jax` to src/
-os.chdir(repo / "src" / "vulcan_jax")         # data paths are package-relative
+sys.path.insert(0, str(repo / "src"))        # resolve `import vulcan3` to src/
+os.chdir(repo / "src" / "vulcan3")         # data paths are package-relative
 
 import numpy as np
-import vulcan_jax  # first import -> parses the condensate network
-import vulcan_jax.composition as composition
-import vulcan_jax.chem_funs as chem_funs
+import vulcan3  # first import -> parses the condensate network
+import vulcan3.composition as composition
+import vulcan3.chem_funs as chem_funs
 
 sl = list(composition.species)
 for need in ("H2O", "S8", "H2O_l_s", "S8_l_s"):
     assert need in sl, f"condensate network missing required species {need!r}"
 
-from vulcan_jax.config import default_config
+from vulcan3.config import default_config
 cfg = default_config()
 # Synthetic isothermal atmosphere, const_mix init, no photo -> no data files.
 cfg.atm_type = "isothermal"; cfg.Tiso = 250.0           # cold enough for H2O to supersaturate
@@ -57,10 +57,10 @@ cfg.r_p = {"H2O_l_s": 5e-3, "S8_l_s": 1e-4}
 cfg.rho_p = {"H2O_l_s": 0.9, "S8_l_s": 2.07}
 cfg.use_relax = []
 
-from vulcan_jax.atm_setup import Atm
-from vulcan_jax.state import _Variables, _AtmData
-from vulcan_jax.ini_abun import InitialAbun
-import vulcan_jax.legacy_io as op
+from vulcan3.atm_setup import Atm
+from vulcan3.state import _Variables, _AtmData
+from vulcan3.ini_abun import InitialAbun
+import vulcan3.legacy_io as op
 
 dv = _Variables(); da = _AtmData(); make_atm = Atm()
 da = make_atm.f_pico(da); da = make_atm.load_TPK(da); make_atm.sp_sat(da)
@@ -82,9 +82,9 @@ cfg.use_relax = ["H2O"]; cfg.humidity = 1.0
 cfg.start_conden_time = 0.0; cfg.stop_conden_time = 1e22
 cfg.count_max = 50; cfg.count_min = 1
 
-from vulcan_jax.state import RunState
-import vulcan_jax.op_jax as op_jax
-import vulcan_jax.outer_loop as outer_loop
+from vulcan3.state import RunState
+import vulcan3.op_jax as op_jax
+import vulcan3.outer_loop as outer_loop
 
 t0 = time.time()
 rs = RunState.with_pre_loop_setup(cfg)

@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""VULCAN-JAX driver: build RunState, integrate, pickle .vul."""
+"""VULCAN3 driver: build RunState, integrate, pickle .vul."""
 
 import os
 
@@ -19,7 +19,7 @@ _jax.config.update(
     "jax_compilation_cache_dir",
     os.environ.get(
         "JAX_COMPILATION_CACHE_DIR",
-        os.path.expanduser("~/.cache/jax_vulcan"),
+        os.path.expanduser("~/.cache/vulcan3"),
     ),
 )
 
@@ -33,18 +33,17 @@ from . import op_jax
 from . import outer_loop
 from .runtime_validation import validate_runtime_config
 from .state import RunState
-from ._paths import PACKAGE_ROOT
 
 # Set on the re-executed process by `_relaunch_for_frozen_knobs` so a relaunch
 # that fails to resolve the mismatch raises instead of looping.
-_RELAUNCH_GUARD = "VULCAN_JAX_CLI_RELAUNCHED"
+_RELAUNCH_GUARD = "VULCAN3_CLI_RELAUNCHED"
 
 
 def _frozen_knob_mismatch(cfg):
     """Import-frozen knobs `cfg` disagrees with, as ``{env var: value}``.
 
     Compares against `default_config()` because that is what the import-time
-    freeze read. `load_config` folds ``$VULCAN_JAX_*`` over the YAML
+    freeze read. `load_config` folds ``$VULCAN3_*`` over the YAML
     before returning, so a knob the caller overrode explicitly matches the
     frozen value and never appears here.
     """
@@ -62,14 +61,14 @@ def _frozen_knob_mismatch(cfg):
 
 
 def _relaunch_for_frozen_knobs(cfg, config_ref):
-    """Re-exec with ``$VULCAN_JAX_*`` set when the config needs a different network.
+    """Re-exec with ``$VULCAN3_*`` set when the config needs a different network.
 
     ``network`` / ``atom_list`` / ``com_file`` are read once at the first
-    ``import vulcan_jax`` -- the parsed network, the composition tables, and the
+    ``import vulcan3`` -- the parsed network, the composition tables, and the
     codegen RHS are all built from them -- so a config naming a different
     network cannot be honored in this process. Re-exec once with the variables
     set instead of making the caller prefix them onto every command, so
-    ``vulcan-jax --config W39b`` works on its own.
+    ``vulcan3 --config W39b`` works on its own.
 
     Returns normally when no relaunch is needed; otherwise does not return.
     """
@@ -97,7 +96,7 @@ def _relaunch_for_frozen_knobs(cfg, config_ref):
         [
             sys.executable,
             "-m",
-            "vulcan_jax.vulcan_jax_cli",
+            "vulcan3.cli",
             "--config",
             str(config_ref),
         ],
@@ -106,18 +105,18 @@ def _relaunch_for_frozen_knobs(cfg, config_ref):
 
 
 def cli_main(argv=None):
-    """Entry point for the ``vulcan-jax`` console script.
+    """Entry point for the ``vulcan3`` console script.
 
     ``--config`` selects a config by name (``default``, ``W39b``, ...; resolved
     CWD-first then packaged) or an explicit YAML path. The resolved config is
     written next to the output as ``<out_name>.config.yaml`` so the run can be
-    reproduced with ``vulcan-jax --config <that file>``.
+    reproduced with ``vulcan3 --config <that file>``.
 
     A config selecting a non-default network re-execs once with the matching
-    ``$VULCAN_JAX_*`` variables set (see `_relaunch_for_frozen_knobs`).
+    ``$VULCAN3_*`` variables set (see `_relaunch_for_frozen_knobs`).
     """
     logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stdout)
-    parser = argparse.ArgumentParser(prog="vulcan-jax")
+    parser = argparse.ArgumentParser(prog="vulcan3")
     parser.add_argument(
         "--config",
         "-c",
@@ -128,9 +127,9 @@ def cli_main(argv=None):
 
     cfg = load_config(args.config)
     # Before any validation: a config naming a non-default network can only be
-    # honored by a process that imported vulcan_jax with it already selected.
+    # honored by a process that imported vulcan3 with it already selected.
     _relaunch_for_frozen_knobs(cfg, args.config)
-    validate_runtime_config(cfg, PACKAGE_ROOT)
+    validate_runtime_config(cfg)
 
     runstate = RunState.with_pre_loop_setup(cfg)
 
@@ -149,13 +148,54 @@ def cli_main(argv=None):
     solver = op_jax.Ros2JAX()
     integ = outer_loop.OuterLoop(solver, output, cfg=cfg)
 
-    print(f"VULCAN-JAX starting integration at t=0, dt={float(runstate.step.dt):.2e}")
-    runstate = integ(runstate)
+    print(f"VULCAN3 starting integration at t=0, dt={float(runstate.step.dt):.2e}")
+    try:
+        # Chunked so Ctrl+C lands between chunks (`OuterLoop.__call__`).
+        runstate = integ(runstate, chunk=int(cfg.print_prog_num))
+    except KeyboardInterrupt:
+        if integ.interrupted_runstate is not None:
+            runstate = integ.interrupted_runstate
+            print(
+                f"\nInterrupted. `runstate` is the last finished chunk "
+                f"(step {int(runstate.params.count)}, t={float(runstate.step.t):.3e} s)."
+            )
+        else:
+            print("\nInterrupted before the first chunk finished; `runstate` "
+                  "is the initial state.")
+        print("`output.save_out(runstate, dname)` writes it as a .vul; "
+              "Ctrl-D quits.")
+        _drop_into_repl(
+            dict(cfg=cfg, runstate=runstate, integ=integ, output=output,
+                 dname=dname)
+        )
+        # An interrupted run is not a success, also for a job wrapper whose
+        # stdin is not a terminal (the shell then exits on EOF at once).
+        sys.exit(130)
 
-    print(f"VULCAN-JAX done. Saving output to {cfg.output_dir}{cfg.out_name}")
+    print(f"VULCAN3 done. Saving output to {cfg.output_dir}{cfg.out_name}")
     output.save_out(runstate, dname)
+    if cfg.use_plot_end:
+        output.plot_end(runstate)
+    if cfg.use_plot_evo:
+        output.plot_evo(runstate)
 
     print(f"Total wall time: {time.time() - runstate.metadata.start_time:.1f}s")
+
+
+def _drop_into_repl(namespace):
+    """IPython if installed, else the standard console with line editing."""
+    try:
+        from IPython import embed
+    except ImportError:
+        import code
+
+        try:
+            import readline  # noqa: F401  (arrow keys and history in `code`)
+        except ImportError:
+            pass
+        code.interact(local=namespace)
+    else:
+        embed(user_ns=namespace, colors="neutral")
 
 
 if __name__ == "__main__":

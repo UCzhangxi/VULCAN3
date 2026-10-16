@@ -28,7 +28,7 @@ FLOOR_FRAC = 1e-12  # cancellation-residue floor, a fraction of the reference pe
 def main() -> int:
     os.chdir(VULCAN_MASTER)
     sys.path.append(str(VULCAN_MASTER))
-    from vulcan_jax.config import default_config
+    from vulcan3.config import default_config
 
     vulcan_cfg = default_config()
     import op  # VULCAN-master's op (oracle)
@@ -41,7 +41,7 @@ def main() -> int:
     # Build canonical HD189 state via the typed pre-loop pipeline and
     # derive a legacy `(var, atm, _)` shim for master's `op.ODESolver`,
     # which only reads `var.y` and `atm.*` (both populated by `legacy_view`).
-    from vulcan_jax.state import RunState, legacy_view
+    from vulcan3.state import RunState, legacy_view
 
     rs = RunState.with_pre_loop_setup(vulcan_cfg)
     data_var, data_atm, _ = legacy_view(rs)

@@ -36,7 +36,7 @@ EXACT_RTOL = 1e-13  # the same formula on both sides, roundoff only
 def main() -> int:
     os.chdir(VULCAN_MASTER)
     sys.path.append(str(VULCAN_MASTER))
-    from vulcan_jax.config import default_config
+    from vulcan3.config import default_config
 
     vulcan_cfg = default_config()
     import op
@@ -47,11 +47,11 @@ def main() -> int:
     master_cfg.diff_esc = ["H"]
 
     os.chdir(ROOT)
-    import vulcan_jax.op_jax as op_jax
-    import vulcan_jax.outer_loop as outer_loop
-    from vulcan_jax import atm_refresh
-    from vulcan_jax.atm_setup import Atm
-    from vulcan_jax.state import RunState, legacy_view, runstate_from_store
+    import vulcan3.op_jax as op_jax
+    import vulcan3.outer_loop as outer_loop
+    from vulcan3 import atm_refresh
+    from vulcan3.atm_setup import Atm
+    from vulcan3.state import RunState, legacy_view, runstate_from_store
 
     # --- Build HD189 reference state ---
     rs = RunState.with_pre_loop_setup(vulcan_cfg)
@@ -99,7 +99,7 @@ def main() -> int:
     )
 
     ok = True
-    from vulcan_jax.phy_const import UNDERFLOW_DENOM
+    from vulcan3.phy_const import UNDERFLOW_DENOM
 
     for label, A, B, rtol in (
         ("mu", atm_A.mu, mu_B, EXACT_RTOL),

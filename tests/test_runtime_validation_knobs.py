@@ -16,8 +16,8 @@ import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parent.parent
-CONFIGS = ROOT / "src" / "vulcan_jax" / "configs"
-VALIDATION = ROOT / "src" / "vulcan_jax" / "runtime_validation.py"
+CONFIGS = ROOT / "src" / "vulcan3" / "configs"
+VALIDATION = ROOT / "src" / "vulcan3" / "runtime_validation.py"
 
 # Conditionally-read knobs: the validator only reaches them when another knob
 # turns their subsystem on, so a config that leaves the subsystem off need not
@@ -101,7 +101,7 @@ def test_the_validator_carries_no_literal_config_defaults():
 @pytest.mark.parametrize("value", [0, -1, 1.5, float("nan"), float("inf"), 2**31])
 def test_invalid_photolysis_cadence_is_refused(key, value):
     from types import SimpleNamespace
-    from vulcan_jax.runtime_validation import _validate_numerical_bounds
+    from vulcan3.runtime_validation import _validate_numerical_bounds
 
     errors = _validate_numerical_bounds(SimpleNamespace(**{key: value}))
     assert any(key in error for error in errors)

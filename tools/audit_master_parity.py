@@ -67,7 +67,11 @@ KNOWN_SFLUX_RESCALES: dict[str, float] = {
     "sflux-epseri.txt": EPS_ERI_RSTAR_RSUN**-4,
 }
 
-UI_OUTPUT_KEYS = {"output_dir", "out_name", "save_evolution", "save_evo_frq"}
+UI_OUTPUT_KEYS = {
+    "output_dir", "out_name", "save_evolution", "save_evo_frq",
+    "print_prog_num", "use_plot_end", "use_plot_evo",
+    "plot_dir", "plot_spec",
+}
 
 IGNORED_RUNTIME_FILENAMES = {".DS_Store"}
 # .md files are docs, not runtime data (master carries two thermo READMEs).
@@ -123,8 +127,8 @@ def _runtime_files(root: Path) -> dict[Path, str]:
 
 def _compare_cfgs(master_cfg: Path) -> list[str]:
     """Compare master HD189 physics config against the JAX HD189 config (YAML)."""
-    from vulcan_jax.atm_setup import surface_gravity
-    from vulcan_jax.config import load_config
+    from vulcan3.atm_setup import surface_gravity
+    from vulcan3.config import load_config
 
     errors: list[str] = []
     master = _load_cfg(master_cfg)
@@ -161,11 +165,13 @@ def _compare_cfgs(master_cfg: Path) -> list[str]:
                 )
 
     # Master keys absent in JAX are drift, except config._REMOVED_KEYS (gs
-    # among them: JAX derives it from Mp/Rp).
-    from vulcan_jax.config import _REMOVED_KEYS
+    # among them: JAX derives it from Mp/Rp) and the display-only keys JAX
+    # drops (config._IGNORED_KEYS).
+    from vulcan3.config import _IGNORED_KEYS, _REMOVED_KEYS
 
     missing_in_jax = sorted(
         set(master) - set(jax) - UI_OUTPUT_KEYS - set(_REMOVED_KEYS)
+        - _IGNORED_KEYS
     )
     if missing_in_jax:
         errors.append(f"JAX cfg missing master keys: {missing_in_jax}")
@@ -411,7 +417,7 @@ def main(argv: list[str] | None = None) -> int:
     # Runtime data (atm/, thermo/) lives under the installed package, not the
     # repo root; the JAX config is loaded by name from configs/*.yaml. Default
     # to the package dir so no explicit --jax-root is needed.
-    from vulcan_jax._paths import PACKAGE_ROOT
+    from vulcan3._paths import PACKAGE_ROOT
 
     parser.add_argument(
         "--master",
@@ -424,7 +430,7 @@ def main(argv: list[str] | None = None) -> int:
         "--jax-root",
         type=Path,
         default=PACKAGE_ROOT,
-        help="Path to the VULCAN-JAX package dir (src/vulcan_jax).",
+        help="Path to the VULCAN-JAX package dir (src/vulcan3).",
     )
     args = parser.parse_args(argv)
 

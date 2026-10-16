@@ -1,4 +1,4 @@
-"""VULCAN-JAX: JAX-accelerated photochemical kinetics for exoplanet atmospheres.
+"""VULCAN3: JAX-accelerated photochemical kinetics for exoplanet atmospheres.
 
 Float64 is enabled at import time (non-negotiable for rate-constant
 arithmetic spanning ~50 orders of magnitude).
@@ -36,17 +36,17 @@ def make_config(**overrides: Any) -> Config:
 
     Example::
 
-        cfg = vulcan_jax.make_config(nz=100, use_photo=False)
-        rs = vulcan_jax.RunState.with_pre_loop_setup(cfg)
+        cfg = vulcan3.make_config(nz=100, use_photo=False)
+        rs = vulcan3.RunState.with_pre_loop_setup(cfg)
     """
     return load_config("default", **overrides)
 
 
 def __getattr__(name: str) -> Any:
-    # Lazy: outer_loop imports jax_step, which freezes $VULCAN_JAX_SOLVER;
-    # `import vulcan_jax` must leave that choice open.
+    # Lazy: outer_loop imports jax_step, which freezes $VULCAN3_SOLVER;
+    # `import vulcan3` must leave that choice open.
     if name == "conv_normal":
         from .outer_loop import conv_normal
 
         return conv_normal
-    raise AttributeError(f"module 'vulcan_jax' has no attribute {name!r}")
+    raise AttributeError(f"module 'vulcan3' has no attribute {name!r}")

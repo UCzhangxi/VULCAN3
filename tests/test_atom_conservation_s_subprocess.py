@@ -27,20 +27,20 @@ warnings.filterwarnings("ignore")
 from pathlib import Path
 repo = Path(sys.argv[1])
 sys.path.insert(0, str(repo / "src"))
-os.chdir(repo / "src" / "vulcan_jax")
+os.chdir(repo / "src" / "vulcan3")
 
 import numpy as np
 import jax.numpy as jnp
 
 # Set atom_list BEFORE the first jax_step import so the static reservoir tables
 # pick up sulfur (state.py imports jax_step lazily, so this ordering holds).
-from vulcan_jax.config import default_config
+from vulcan3.config import default_config
 cfg = default_config()
 cfg.atom_list = ["H", "O", "C", "N", "S"]
 
-import vulcan_jax.jax_step as js
-import vulcan_jax.composition as composition
-from vulcan_jax.chem_funs import spec_list as SL
+import vulcan3.jax_step as js
+import vulcan3.composition as composition
+from vulcan3.chem_funs import spec_list as SL
 
 ATOMS = ("H", "O", "C", "N", "S")
 RES = ("H2", "H2O", "CO", "N2", "H2S")
@@ -91,8 +91,8 @@ cfg.nz = 50; cfg.P_b = 1e9; cfg.P_t = 1e0
 cfg.use_topflux = False; cfg.use_botflux = False
 cfg.use_fix_sp_bot = {}; cfg.use_ini_cold_trap = False; cfg.use_print_prog = False
 
-from vulcan_jax.state import RunState
-from vulcan_jax.chem_funs import chem_rhs_codegen as RHS
+from vulcan3.state import RunState
+from vulcan3.chem_funs import chem_rhs_codegen as RHS
 
 rs = RunState.with_pre_loop_setup(cfg)
 y = jnp.asarray(np.asarray(rs.step.y, dtype=np.float64))

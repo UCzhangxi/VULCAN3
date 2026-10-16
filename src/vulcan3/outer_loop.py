@@ -748,9 +748,10 @@ def _make_runner(
     photo_static: Optional[_PhotoStatic] = None,
     conden_static: Optional[_conden_mod.CondenStatic] = None,
 ):
-    """Build `(runner, runner_batch, runner_queue, _make_runner_jvp)`; the
-    JIT'd `runner(state, atm_static) -> state` runs to
-    convergence, `count_max`, or `runtime`.
+    """Build `(runner, runner_chunk, runner_batch, runner_queue,
+    _make_runner_jvp)`; the JIT'd `runner(state, atm_static) -> state` runs to
+    convergence, `count_max`, or `runtime`, and `runner_chunk(state,
+    atm_static, target)` also stops when `accept_count` reaches `target`.
 
     Body order per iteration (matches `op.Integration.__call__`):
       1. photo       (when accept_count % update_photo_frq == 0)
@@ -1631,6 +1632,19 @@ def _make_runner(
         _real_term, reason = _real_terminate(final)
         return final._replace(termination_reason=reason)
 
+    @jax.jit
+    def runner_chunk(state: JaxIntegState, atm_static: AtmStatic, target):
+        # `runner` cut off once `accept_count` reaches `target`, so a host
+        # loop can print progress and take Ctrl+C between chunks. Same body
+        # and carry: resuming from the returned state continues the run.
+        final = jax.lax.while_loop(
+            lambda s: cond_fn(s) & (s.accept_count < target),
+            lambda s: body_fn(s, atm_static),
+            state,
+        )
+        _real_term, reason = _real_terminate(final)
+        return final._replace(termination_reason=reason)
+
     def _tangent_conv(s_next: JaxIntegState, ds_next: JaxIntegState):
         """The primal's longdy reduction on the tangent: `dy - dy_lookback`
         over `y`, on the cells the primal certifies on. Per cell and
@@ -2108,7 +2122,7 @@ def _make_runner(
             }
         return out, it
 
-    return runner, runner_batch, runner_queue, _make_runner_jvp
+    return runner, runner_chunk, runner_batch, runner_queue, _make_runner_jvp
 
 
 # vmap axis name of the batched runner. `body_fn_batch` / `body_fn` psum over
@@ -2286,7 +2300,11 @@ class OuterLoop:
         # The closure pins the config read at build time; there is no reset --
         # a changed config means a new runner object.
         self._runner = None
+        self._runner_chunk = None
         self._make_runner_jvp = None
+        # `integ(rs, chunk=N)` stores the last finished chunk here as a
+        # RunState when Ctrl+C stops the run.
+        self.interrupted_runstate = None
         self._runner_jvp_cache = {}
         # Un-jitted freeze-on-done while_loop over a vmapped step (the
         # batched path), and its jax.jit wrapper (`run_batch`). Both ride the
@@ -2312,6 +2330,10 @@ class OuterLoop:
             [float(var.atom_ini[a]) for a in self._atom_order],
             dtype=np.float64,
         )
+
+        # plot_evo reads the same snapshots; only save_evolution writes them
+        # to the .vul.
+        capture_evo = bool(self._cfg.save_evolution or self._cfg.use_plot_evo)
 
         # conver_ignore species are zeroed in the longdy reduction (op.py:1045-1046).
         conver_ignore_np = np.zeros(ni, dtype=bool)
@@ -2473,7 +2495,7 @@ class OuterLoop:
             fix_species_idx=jnp.asarray(fix_species_idx),
             fix_species_sat_mix=jnp.asarray(fix_species_sat_mix),
             fix_species_wholecol=jnp.asarray(fix_species_wholecol),
-            save_evolution=bool(self._cfg.save_evolution),
+            save_evolution=capture_evo,
             save_evo_frq=int(self._cfg.save_evo_frq),
             save_evo_n_max=(
                 int(
@@ -2483,7 +2505,7 @@ class OuterLoop:
                     )
                 )
                 + 1
-                if bool(self._cfg.save_evolution)
+                if capture_evo
                 else 1
             ),
         )
@@ -2521,6 +2543,7 @@ class OuterLoop:
         self._conden_static = self._build_conden_static(var, atm, gas_mask_jnp)
         (
             self._runner,
+            self._runner_chunk,
             self._runner_batch,
             self._runner_queue,
             self._make_runner_jvp,
@@ -3192,7 +3215,7 @@ class OuterLoop:
         while hitting a cap reads end_case=1, and so does a hybrid phase-1
         convergence past the static count_max.
 
-        end_case=5 is a VULCAN-JAX addition with no upstream counterpart: the
+        end_case=5 is a VULCAN3 addition with no upstream counterpart: the
         run stopped without meeting the convergence criterion and without
         hitting either cap -- a run stopped on a non-finite state
         (termination_reason 5) or a "converged" state that is not finite.
@@ -3250,10 +3273,16 @@ class OuterLoop:
         else:
             self.output.print_unconverged_msg(var, para, end_case)
 
-    def __call__(self, rs):
+    def __call__(self, rs, chunk=None):
         """Integrate a fresh `RunState` (`params.count == 0`) to convergence
         or the runtime / step-count cap and return a new `RunState`.
         Raise `ValueError` if `rs` has already run.
+
+        `chunk=None` runs one compiled loop. `chunk=N` runs the same loop in
+        pieces of N accepted steps, prints a progress block after each (when
+        `use_print_prog`), and on Ctrl+C stores the last finished piece as
+        `self.interrupted_runstate` before re-raising. One loop cannot be
+        interrupted: Ctrl+C reaches Python only when it returns.
         """
         count = int(rs.params.count)
         if count > 0:
@@ -3265,10 +3294,48 @@ class OuterLoop:
                 "(budget_err / budget_drift) or the hybrid vm_mol phase, so a "
                 "resumed run would restart all three from zero."
             )
+        self.interrupted_runstate = None
         init_state, atm_static = self.prepare_runstate(rs)
-        rs_out = self._unpack_state_to_runstate(self._runner(init_state, atm_static), rs)
+        if chunk is None:
+            rs_out = self._unpack_state_to_runstate(
+                self._runner(init_state, atm_static), rs)
+        else:
+            rs_out = self._run_chunked(init_state, atm_static, rs, int(chunk))
         self._report_end(rs_out)
         return rs_out
+
+    def _run_chunked(self, state, atm_static, rs, chunk):
+        """Drive `runner_chunk` until a chunk ends short of its target, which
+        only a real termination does (a run that ends exactly on a target
+        returns from the next call after zero iterations)."""
+        import types
+
+        if chunk < 1:
+            raise ValueError(f"chunk must be a positive step count, got {chunk}")
+        try:
+            while True:
+                target = int(state.accept_count) + chunk
+                nxt = self._runner_chunk(
+                    state, atm_static, jnp.asarray(target, state.accept_count.dtype)
+                )
+                done = int(nxt.accept_count) < target
+                state = nxt
+                if done:
+                    return self._unpack_state_to_runstate(state, rs)
+                if self._cfg.use_print_prog:
+                    # print_prog reads only these fields.
+                    self.output.print_prog(
+                        types.SimpleNamespace(
+                            t=float(state.t), dt=float(state.dt),
+                            longdy=float(state.longdy),
+                            longdydt=float(state.longdydt)),
+                        types.SimpleNamespace(
+                            count=int(state.accept_count),
+                            where_varies_most=np.asarray(state.where_varies_most)),
+                    )
+        except KeyboardInterrupt:
+            self.interrupted_runstate = self._unpack_state_to_runstate(state, rs)
+            raise
 
     def prepare_runstate(self, rs):
         """Build `(init_state, atm_static)` for one RunState, and build the

@@ -29,16 +29,16 @@ warnings.filterwarnings("ignore")
 def main() -> int:
     os.chdir(VULCAN_MASTER)
     sys.path.append(str(VULCAN_MASTER))
-    from vulcan_jax.config import default_config
+    from vulcan3.config import default_config
 
     vulcan_cfg = default_config()
-    from vulcan_jax.atm_setup import Atm
+    from vulcan3.atm_setup import Atm
     import op
 
-    from vulcan_jax.state import _Variables, _AtmData
+    from vulcan3.state import _Variables, _AtmData
 
-    import vulcan_jax.network as net_mod  # VULCAN-JAX
-    import vulcan_jax.rates_jax as rates_mod  # VULCAN-JAX
+    import vulcan3.network as net_mod  # VULCAN-JAX
+    import vulcan3.rates_jax as rates_mod  # VULCAN-JAX
 
     # === 1. Run VULCAN setup until var.k is populated ===
     data_var = _Variables()

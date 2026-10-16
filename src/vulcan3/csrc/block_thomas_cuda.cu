@@ -1,8 +1,8 @@
-// CUDA twin of block_thomas_cpu.cc (VULCAN_JAX_SOLVER=ffi on a GPU): the same
+// CUDA twin of block_thomas_cpu.cc (VULCAN3_SOLVER=ffi on a GPU): the same
 // block-Thomas factor and solve on [..., nz, ni, ni] blocks, with the same perm
 // convention (perm[i] = source row of permuted row i). One thread block per
 // batch element, the whole nz sweep inside the kernel. A zero pivot gives
-// inf/nan like lax.linalg.lu, not an error. Build: python -m vulcan_jax.solver_fast --cuda.
+// inf/nan like lax.linalg.lu, not an error. Build: python -m vulcan3.solver_fast --cuda.
 //
 // The factor has two kernels with the same output (lu in partial-pivot row
 // order and perm). bt_gj_factor_kernel, the default wherever it fits (ni <=
@@ -16,14 +16,14 @@
 // (ni 89, 396 columns) the Gauss-Jordan factor takes 19.6 ms against 31.4,
 // with the same perm in every layer and the same accuracy against a binary128
 // solve. bt_factor_kernel takes ni > 96 (the DMS network, ni 97) and any
-// device the Gauss-Jordan kernel does not fit. VULCAN_JAX_BT_FACTOR=gj or lu
+// device the Gauss-Jordan kernel does not fit. VULCAN3_BT_FACTOR=gj or lu
 // forces one.
 //
 // The LU factor and the solve launch 2 ni threads rounded up to a warp. Each
 // has two variants with bitwise equal results: two ni x ni double blocks of
 // shared memory plus O(ni) (about 125 KB at ni = 89), or one (about 63 KB),
 // which fits more blocks on an SM. A call takes two buffers when they fit the
-// device and need no more waves than one (bt_choose); VULCAN_JAX_BT_BUFFERS=1
+// device and need no more waves than one (bt_choose); VULCAN3_BT_BUFFERS=1
 // or 2 forces a variant. Shared memory is opted in to the device maximum. The
 // solve keeps each lane's substitution rows in registers, so it takes ni <= 128
 // and refuses more.
@@ -882,23 +882,23 @@ ffi::Error bt_shared_fits(size_t bytes, const BtOptIn& opt) {
   return ffi::Error::Success();
 }
 
-// VULCAN_JAX_BT_BUFFERS, read once per process: unset or empty picks the
+// VULCAN3_BT_BUFFERS, read once per process: unset or empty picks the
 // variant per call (bt_choose); "1" or "2" forces the one- or two-buffer
 // kernels, for the A/B and the byte-identity test.
 const char* bt_forced_buffers() {
   static const char* const v = [] {
-    const char* e = std::getenv("VULCAN_JAX_BT_BUFFERS");
+    const char* e = std::getenv("VULCAN3_BT_BUFFERS");
     return (e == nullptr) ? "" : e;
   }();
   return v;
 }
 
-// VULCAN_JAX_BT_FACTOR, read once per process: unset or empty picks the
+// VULCAN3_BT_FACTOR, read once per process: unset or empty picks the
 // factor kernel per call (bt_choose_factor); "gj" or "lu" forces the
 // Gauss-Jordan or the LU one, for the A/B and the tests.
 const std::string& bt_forced_factor() {
   static const std::string v = [] {
-    const char* e = std::getenv("VULCAN_JAX_BT_FACTOR");
+    const char* e = std::getenv("VULCAN3_BT_FACTOR");
     return std::string((e == nullptr) ? "" : e);
   }();
   return v;
@@ -920,7 +920,7 @@ ffi::Error bt_choose(int device, int64_t batch, const void* two, size_t shmem2, 
   if (std::strcmp(forced, "1") == 0 || std::strcmp(forced, "2") == 0) {
     *one_buf = forced[0] == '1';
   } else if (forced[0] != '\0') {
-    return ffi::Error::InvalidArgument(std::string("VULCAN_JAX_BT_BUFFERS=") + forced +
+    return ffi::Error::InvalidArgument(std::string("VULCAN3_BT_BUFFERS=") + forced +
                                        ": expected 1, 2 or unset");
   } else if (shmem2 > static_cast<size_t>(opt.limit)) {
     *one_buf = true;
@@ -940,18 +940,18 @@ ffi::Error bt_choose(int device, int64_t batch, const void* two, size_t shmem2, 
 }
 
 // Sets *gj to whether a factor call of block order `ni` runs the Gauss-Jordan
-// kernel: unless VULCAN_JAX_BT_FACTOR=lu, whenever ni <= kGjMaxNi and the
+// kernel: unless VULCAN3_BT_FACTOR=lu, whenever ni <= kGjMaxNi and the
 // occupancy calculator leaves at least one block of it resident on an SM (its
 // shared memory within the opt-in limit). No wave count: on a GH200 it beats
 // the LU kernel at every batch measured (132 to 1188 columns at ni 89), also
-// where it needs more waves. With VULCAN_JAX_BT_FACTOR=gj a call it cannot
+// where it needs more waves. With VULCAN3_BT_FACTOR=gj a call it cannot
 // take is an error. Returns the error that forbids the call, if any.
 ffi::Error bt_choose_factor(int device, int ni, bool* gj) {
   const std::string& forced = bt_forced_factor();
   *gj = false;
   if (forced == "lu") return ffi::Error::Success();
   if (!forced.empty() && forced != "gj") {
-    return ffi::Error::InvalidArgument("VULCAN_JAX_BT_FACTOR=" + forced +
+    return ffi::Error::InvalidArgument("VULCAN3_BT_FACTOR=" + forced +
                                        ": expected gj, lu or unset");
   }
   BtOptIn opt;
@@ -967,7 +967,7 @@ ffi::Error bt_choose_factor(int device, int ni, bool* gj) {
   }
   if (forced == "gj" && !*gj) {
     return ffi::Error::InvalidArgument(
-        "VULCAN_JAX_BT_FACTOR=gj: the Gauss-Jordan factor takes ni <= " +
+        "VULCAN3_BT_FACTOR=gj: the Gauss-Jordan factor takes ni <= " +
         std::to_string(kGjMaxNi) + " and needs " + std::to_string(shmem) +
         " B of shared memory and a resident block on this device; ni = " + std::to_string(ni));
   }

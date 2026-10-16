@@ -57,8 +57,8 @@ _KNOWN_FIRST_WINS_MASS = {"C2H4O": 44.054, "CH3NO2": 61.042, "HCS": 45.178}
 
 
 def test_species_masses_match_atom_counts():
-    from vulcan_jax._paths import resolve_data_path
-    from vulcan_jax.config import default_config
+    from vulcan3._paths import resolve_data_path
+    from vulcan3.config import default_config
 
     compo = np.genfromtxt(
         resolve_data_path(default_config().com_file), names=True, dtype=None, encoding=None

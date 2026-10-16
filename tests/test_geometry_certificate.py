@@ -13,12 +13,12 @@ CADENCE_TOL = 1e-2   # measured 3.1e-3 at geom_conv_tol 1e-3; 1.56 without the t
 def _run(update_frq):
     import jax.numpy as jnp
     import numpy as np
-    from vulcan_jax import atm_refresh
-    from vulcan_jax.config import load_config
-    from vulcan_jax.legacy_io import Output
-    from vulcan_jax.op_jax import Ros2JAX
-    from vulcan_jax.outer_loop import OuterLoop
-    from vulcan_jax.state import RunState
+    from vulcan3 import atm_refresh
+    from vulcan3.config import load_config
+    from vulcan3.legacy_io import Output
+    from vulcan3.op_jax import Ros2JAX
+    from vulcan3.outer_loop import OuterLoop
+    from vulcan3.state import RunState
 
     cfg = load_config("HD209", use_photo=False, use_print_prog=False,
                       count_max=6000, update_frq=update_frq)

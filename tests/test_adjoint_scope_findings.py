@@ -18,7 +18,7 @@ from types import SimpleNamespace
 import jax.numpy as jnp
 import pytest
 
-from vulcan_jax.steady_state_grad import BodyTerms, _adjoint_scope_findings
+from vulcan3.steady_state_grad import BodyTerms, _adjoint_scope_findings
 
 # The refresh feedback is unconditional, so every case carries it.
 ALWAYS = ("atm_refresh_feedback", "info")

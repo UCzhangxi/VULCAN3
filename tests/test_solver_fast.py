@@ -1,4 +1,4 @@
-"""The default solver path (`vulcan_jax.solver_fast`, `VULCAN_JAX_SOLVER=fast|ffi`)
+"""The default solver path (`vulcan3.solver_fast`, `VULCAN3_SOLVER=fast|ffi`)
 against the reference factor/solve pair in `solver` (`_oracles.block_thomas_diag_offdiag`).
 
 What must hold, for both backends: the primal is the same solution (bit-identical
@@ -28,9 +28,9 @@ import pytest
 
 jax.config.update("jax_enable_x64", True)
 
-if os.environ.get("VULCAN_JAX_SOLVER") == "reference":
+if os.environ.get("VULCAN3_SOLVER") == "reference":
     pytest.skip(
-        "VULCAN_JAX_SOLVER=reference: solver_fast refuses to import under the "
+        "VULCAN3_SOLVER=reference: solver_fast refuses to import under the "
         "reference solver, so the fast/ffi comparisons do not run",
         allow_module_level=True,
     )
@@ -38,7 +38,7 @@ if os.environ.get("VULCAN_JAX_SOLVER") == "reference":
 from _helpers import load_adj_state
 from _oracles import block_thomas_diag_offdiag
 
-import vulcan_jax.solver_fast as fast_mod
+import vulcan3.solver_fast as fast_mod
 
 ROOT = Path(__file__).resolve().parent.parent
 DTS = (1e2, 3.8e4, 1e6, 1e11)
@@ -53,7 +53,7 @@ KERNEL_RTOL = 1e-13
 # <= 4e3 on KERNEL_CASES; a matrix-level numpy emulation reads up to 5.2e-14
 # on `tie`, before the GPU's own FMA and reassociation).
 GJ_KERNEL_RTOL = 1e-12
-# The CUDA factor kernels VULCAN_JAX_BT_FACTOR forces; unset, a call runs the
+# The CUDA factor kernels VULCAN3_BT_FACTOR forces; unset, a call runs the
 # Gauss-Jordan one up to GJ_MAX_NI (block_thomas_cuda.cu kGjMaxNi) and the LU
 # one above. The variable is read once per process, so each runs in a child.
 FACTOR_VARIANTS = ("gj", "lu")
@@ -224,7 +224,7 @@ def _cuda_device():
     except RuntimeError:
         pytest.skip("no CUDA device visible to JAX: the CUDA kernel is not checked")
     if not fast_mod._CUDA_LIB.exists():
-        pytest.skip(f"{fast_mod._CUDA_LIB.name} not built (python -m vulcan_jax.solver_fast --cuda)")
+        pytest.skip(f"{fast_mod._CUDA_LIB.name} not built (python -m vulcan3.solver_fast --cuda)")
     return dev
 
 
@@ -276,7 +276,7 @@ np.savez(out, **res)
 
 @pytest.fixture(scope="module")
 def factor_variant_runs(tmp_path_factory):
-    """Per VULCAN_JAX_BT_FACTOR setting ("" for unset), its child's runs of
+    """Per VULCAN3_BT_FACTOR setting ("" for unset), its child's runs of
     KERNEL_CASES and CHOICE_CASES on the CUDA device, keyed
     "{nz}_{ni}_{kind}/{lu,perm,x,xs}", or ".../error" for a refused call."""
     runs, tmp = {}, tmp_path_factory.mktemp("factor")
@@ -284,9 +284,9 @@ def factor_variant_runs(tmp_path_factory):
     def run(factor):
         if factor not in runs:
             env = {k: v for k, v in os.environ.items()
-                   if k not in ("JAX_PLATFORMS", "VULCAN_JAX_BT_FACTOR")}
+                   if k not in ("JAX_PLATFORMS", "VULCAN3_BT_FACTOR")}
             if factor:
-                env["VULCAN_JAX_BT_FACTOR"] = factor
+                env["VULCAN3_BT_FACTOR"] = factor
             path = tmp / f"factor_{factor or 'unset'}.npz"
             res = subprocess.run([sys.executable, "-c", _FACTOR_CHILD, str(ROOT), str(path)],
                                  capture_output=True, text=True, env=env, cwd=ROOT, timeout=900)
@@ -344,7 +344,7 @@ def test_cuda_kernel_matches_cpu_kernel(nz, ni, kind, factor, factor_variant_run
 
 
 def test_factor_kernel_choice(factor_variant_runs):
-    """With VULCAN_JAX_BT_FACTOR unset a call runs the Gauss-Jordan factor up
+    """With VULCAN3_BT_FACTOR unset a call runs the Gauss-Jordan factor up
     to GJ_MAX_NI and the LU one above: on every block the unset child's output
     is byte for byte the gj child's up to ni 96 and the lu child's at 97, where
     the forced gj is refused. The two forced kernels differ beyond the first
@@ -361,7 +361,7 @@ def test_factor_kernel_choice(factor_variant_runs):
         for k in _RUN_KEYS:
             assert unset[f"{key}/{k}"].tobytes() == want[f"{key}/{k}"].tobytes(), (key, k)
     over = f"2_{GJ_MAX_NI + 1}_random"
-    assert "VULCAN_JAX_BT_FACTOR=gj" in str(gj.get(f"{over}/error")), gj.get(f"{over}/error")
+    assert "VULCAN3_BT_FACTOR=gj" in str(gj.get(f"{over}/error")), gj.get(f"{over}/error")
     assert any(gj[f"{nz}_{ni}_{kind}/lu"].tobytes() != lu[f"{nz}_{ni}_{kind}/lu"].tobytes()
                for nz, ni, kind in KERNEL_CASES if nz > 1)
     d, s, c, r = _kernel_case(2, GJ_MAX_NI, "random")
@@ -378,12 +378,12 @@ _SANITIZER_CHILD = r"""
 import os, sys
 import jax, jax.numpy as jnp, numpy as np
 jax.config.update("jax_enable_x64", True)
-import vulcan_jax.solver_fast as fast_mod
+import vulcan3.solver_fast as fast_mod
 dev = jax.devices("cuda")[0]
 # ni 89 and 97 (SNCHO, DMS) in the one-buffer run only: two buffers exceed a sm_89 card;
 # the forced Gauss-Jordan factor takes ni up to argv[1] (GJ_MAX_NI)
-one_buf = os.environ["VULCAN_JAX_BT_BUFFERS"] == "1"
-gj = os.environ["VULCAN_JAX_BT_FACTOR"] == "gj"
+one_buf = os.environ["VULCAN3_BT_BUFFERS"] == "1"
+gj = os.environ["VULCAN3_BT_FACTOR"] == "gj"
 for nz, ni in [(1, 5), (3, 16), (4, 33), (6, 64)] + [(3, 89), (2, 97)] * one_buf:
     if gj and ni > int(sys.argv[1]):
         continue
@@ -402,21 +402,21 @@ for nz, ni in [(1, 5), (3, 16), (4, 33), (6, 64)] + [(3, 89), (2, 97)] * one_buf
 @pytest.mark.parametrize("buffers", ["1", "2"])
 @pytest.mark.parametrize("tool", ["memcheck", "racecheck", "synccheck", "initcheck"])
 def test_cuda_kernel_under_compute_sanitizer(tool, buffers, factor):
-    """Opt-in: set VULCAN_JAX_COMPUTE_SANITIZER to the compute-sanitizer
+    """Opt-in: set VULCAN3_COMPUTE_SANITIZER to the compute-sanitizer
     binary. The CUDA factor and a stacked solve on small pivoting shapes run
     under each tool, with each factor kernel and the one- and two-buffer
     variants, and any report fails. XLA's platform allocator gives each buffer
     its own allocation, so memcheck sees an overrun past it; command buffers
     are off, so the launches are plain."""
-    exe = os.environ.get("VULCAN_JAX_COMPUTE_SANITIZER")
+    exe = os.environ.get("VULCAN3_COMPUTE_SANITIZER")
     if not exe:
-        pytest.skip("set VULCAN_JAX_COMPUTE_SANITIZER to the compute-sanitizer binary to run")
+        pytest.skip("set VULCAN3_COMPUTE_SANITIZER to the compute-sanitizer binary to run")
     if not fast_mod._CUDA_LIB.exists():
-        pytest.skip(f"{fast_mod._CUDA_LIB.name} not built (python -m vulcan_jax.solver_fast --cuda)")
+        pytest.skip(f"{fast_mod._CUDA_LIB.name} not built (python -m vulcan3.solver_fast --cuda)")
     env = {k: v for k, v in os.environ.items() if k != "JAX_PLATFORMS"}
     env.update(XLA_PYTHON_CLIENT_ALLOCATOR="platform", XLA_PYTHON_CLIENT_PREALLOCATE="false",
-               XLA_FLAGS="--xla_gpu_enable_command_buffer=", VULCAN_JAX_BT_BUFFERS=buffers,
-               VULCAN_JAX_BT_FACTOR=factor)
+               XLA_FLAGS="--xla_gpu_enable_command_buffer=", VULCAN3_BT_BUFFERS=buffers,
+               VULCAN3_BT_FACTOR=factor)
     res = subprocess.run([exe, "--tool", tool, "--error-exitcode", "1", sys.executable, "-c",
                           _SANITIZER_CHILD, str(GJ_MAX_NI)], capture_output=True, text=True,
                          env=env, timeout=600)
@@ -426,15 +426,15 @@ def test_cuda_kernel_under_compute_sanitizer(tool, buffers, factor):
 # The one- and two-buffer CUDA kernels run the same operations in the same
 # order, so their outputs must be equal byte for byte, nan payloads included;
 # the Gauss-Jordan factor has one variant, so with it that is the solve's.
-# VULCAN_JAX_BT_FACTOR and VULCAN_JAX_BT_BUFFERS are read once per process, so
+# VULCAN3_BT_FACTOR and VULCAN3_BT_BUFFERS are read once per process, so
 # each (factor, buffers) runs in its own child; the child captures the stage-1
 # systems on the CPU and returns them too, so the comparisons also prove every
 # child solved the same bytes. The same runs compare the two factor kernels.
 BUFFER_DTS = (3.8e4, 1e6, 1e11)
 _BUFFER_NETS = {  # fixture, config, the child's network environment
-    "HD189": ("adj_state_hd189.npz", {"VULCAN_JAX_NETWORK": "thermo/NCHO_photo_network.txt"}),
-    "W39b": ("adj_state_w39b.npz", {"VULCAN_JAX_NETWORK": "thermo/SNCHO_photo_network.txt",
-                                    "VULCAN_JAX_ATOM_LIST": "H,O,C,N,S"}),
+    "HD189": ("adj_state_hd189.npz", {"VULCAN3_NETWORK": "thermo/NCHO_photo_network.txt"}),
+    "W39b": ("adj_state_w39b.npz", {"VULCAN3_NETWORK": "thermo/SNCHO_photo_network.txt",
+                                    "VULCAN3_ATOM_LIST": "H,O,C,N,S"}),
 }
 _BUFFERS_CHILD = r"""
 import os, sys
@@ -443,7 +443,7 @@ repo, fixture, cfg_name, out = sys.argv[1:5]
 sys.path.insert(0, os.path.join(repo, "tests"))
 import jax, jax.numpy as jnp
 from test_solver_fast import BUFFER_DTS, _kernel_case, capture_stage1
-import vulcan_jax.solver_fast as fast_mod
+import vulcan3.solver_fast as fast_mod
 cpu, dev = jax.devices("cpu")[0], jax.devices("cuda")[0]
 with jax.default_device(cpu):
     cases = {f"dt{dt:g}": [np.asarray(a) for a in capture_stage1(fixture, cfg_name, dt)]
@@ -475,7 +475,7 @@ def buffer_variants(tmp_path_factory):
         for factor in FACTOR_VARIANTS:
             for buffers in ("2", "1"):
                 env = {k: v for k, v in os.environ.items() if k != "JAX_PLATFORMS"}
-                env.update(net_env, VULCAN_JAX_BT_FACTOR=factor, VULCAN_JAX_BT_BUFFERS=buffers)
+                env.update(net_env, VULCAN3_BT_FACTOR=factor, VULCAN3_BT_BUFFERS=buffers)
                 path = tmp / f"{factor}_buffers{buffers}.npz"
                 res = subprocess.run([sys.executable, "-c", _BUFFERS_CHILD, str(ROOT), fixture, net,
                                       str(path)], capture_output=True, text=True, env=env, cwd=ROOT,
@@ -549,7 +549,7 @@ def test_gauss_jordan_factor_on_real_blocks(net, case, buffer_variants):
 def capture_stage1(fixture: str, cfg_name: str, dt: float):
     """The stage-1 system `_ros2_stages` assembles from a saved converged state,
     recorded by wrapping the solver entry points the step imports."""
-    from vulcan_jax import jax_step
+    from vulcan3 import jax_step
 
     atm, net, y, k_arr = load_adj_state(fixture, cfg_name)
     cap: dict = {}
@@ -686,7 +686,7 @@ def check_matrix_free(fixture: str, cfg_name: str, backend: str):
     amplified by the block conditioning with room to spare. dt 1e11 is not compared
     (the tangent is O(1)-conditioned there). Also run by the SNCHO child for
     W39b."""
-    from vulcan_jax import jax_step
+    from vulcan3 import jax_step
 
     fast_mod.BACKEND = backend
     atm, net, y, k_arr = load_adj_state(fixture, cfg_name)
@@ -764,9 +764,9 @@ def test_matrix_free_operator_matches_the_dense_one(fast):
 
 def test_fast_is_the_default_solver():
     """With the switch unset, `jax_step` binds the `solver_fast` entry points."""
-    if "VULCAN_JAX_SOLVER" in os.environ:
-        pytest.skip("VULCAN_JAX_SOLVER is set: the default binding is not checked")
-    from vulcan_jax import jax_step
+    if "VULCAN3_SOLVER" in os.environ:
+        pytest.skip("VULCAN3_SOLVER is set: the default binding is not checked")
+    from vulcan3 import jax_step
 
     assert jax_step.solve_block_thomas_diag_offdiag is fast_mod.solve
     assert jax_step.factor_block_thomas_diag_offdiag is fast_mod.factor
@@ -774,11 +774,11 @@ def test_fast_is_the_default_solver():
 
 _CHILD = r"""
 import os, sys
-os.environ["VULCAN_JAX_ATOM_LIST"] = "H,O,C,N,S"
+os.environ["VULCAN3_ATOM_LIST"] = "H,O,C,N,S"
 repo = sys.argv[1]
 sys.path.insert(0, os.path.join(repo, "tests"))
 from test_solver_fast import check_matrix_free, check_real_blocks
-import vulcan_jax.solver_fast as fast_mod
+import vulcan3.solver_fast as fast_mod
 for backend in ("fast", "ffi"):
     if backend == "ffi":
         fast_mod.build()

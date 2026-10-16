@@ -6,7 +6,7 @@ cold-trap indices are run solo and batched on profile A's runner, and each
 lane must match its solo run on the abundant species (YMIX_FLOOR).
 
 The default import-locked network has no `NH3_l_s`, so the child selects the
-lowT Jupiter network via `$VULCAN_JAX_NETWORK`; config values follow master's
+lowT Jupiter network via `$VULCAN3_NETWORK`; config values follow master's
 Jupiter example with an analytical Heng+14 T-P so no atm file is read.
 """
 
@@ -24,17 +24,17 @@ warnings.filterwarnings("ignore")
 from pathlib import Path
 repo = Path(sys.argv[1])
 sys.path.insert(0, str(repo / "src"))
-os.chdir(repo / "src" / "vulcan_jax")
+os.chdir(repo / "src" / "vulcan3")
 
 import numpy as np
-import vulcan_jax.composition as composition
+import vulcan3.composition as composition
 
 sl = list(composition.species)
 for need in ("NH3", "NH3_l_s", "H2O", "H2O_l_s"):
     assert need in sl, f"lowT Jupiter network missing {need!r}"
 
-from vulcan_jax.config import default_config
-from vulcan_jax.phy_const import G_grav
+from vulcan3.config import default_config
+from vulcan3.phy_const import G_grav
 cfg = default_config()
 
 # Cold Jupiter-like gas giant (master cfg_examples/vulcan_cfg_Jupiter.py values
@@ -76,10 +76,10 @@ cfg.stop_conden_time = 1e22
 cfg.count_max = 40
 cfg.count_min = 1
 
-from vulcan_jax.state import RunState
-import vulcan_jax.legacy_io as op
-import vulcan_jax.op_jax as op_jax
-import vulcan_jax.outer_loop as outer_loop
+from vulcan3.state import RunState
+import vulcan3.legacy_io as op
+import vulcan3.op_jax as op_jax
+import vulcan3.outer_loop as outer_loop
 
 # Two Heng+14 parameter sets whose temperature minima sit at different layers,
 # so the per-profile NH3 cold-trap indices differ (the vacuity guard below).

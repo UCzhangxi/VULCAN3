@@ -31,9 +31,9 @@ def _find_rxn_idx(net, eq: str) -> int:
 def test_lowT_caps_fire_all_three():
     """All 3 caps should fire below their thresholds with the exact Moses+2005
     formulas. Above the thresholds, k stays untouched."""
-    import vulcan_jax.network as net_mod
-    import vulcan_jax.rates_jax as rates
-    from vulcan_jax.config import default_config
+    import vulcan3.network as net_mod
+    import vulcan3.rates_jax as rates
+    from vulcan3.config import default_config
 
     vulcan_cfg = default_config()
 
@@ -95,9 +95,9 @@ def test_lowT_caps_fire_all_three():
 def test_remove_list_zeros_only_listed_indices():
     """`apply_remove_list` zeros literally the indices in `remove_list` and
     nothing else (does not auto-zero the paired forward/reverse partner)."""
-    import vulcan_jax.network as net_mod
-    import vulcan_jax.rates_jax as rates
-    from vulcan_jax.config import default_config
+    import vulcan3.network as net_mod
+    import vulcan3.rates_jax as rates
+    from vulcan3.config import default_config
 
     vulcan_cfg = default_config()
 
@@ -135,10 +135,10 @@ def test_build_rate_array_matches_legacy_hd189(hd189_state):
     compute_J overwrites those slots and `build_rate_array` is the chemistry
     half only.
     """
-    import vulcan_jax.gibbs as gibbs
-    import vulcan_jax.network as net_mod
-    import vulcan_jax.rates_jax as rates
-    from vulcan_jax.config import default_config
+    import vulcan3.gibbs as gibbs
+    import vulcan3.network as net_mod
+    import vulcan3.rates_jax as rates
+    from vulcan3.config import default_config
 
     vulcan_cfg = default_config()
 
@@ -190,10 +190,10 @@ def test_build_rate_array_with_lowT_caps(hd189_state):
     """Pins that `use_lowT_limit_rates=True` is a no-op on HD189 (coolest
     layer ~860 K is above every cap threshold). Cap-firing coverage lives in
     `test_lowT_caps_fire_all_three`."""
-    import vulcan_jax.gibbs as gibbs
-    import vulcan_jax.network as net_mod
-    import vulcan_jax.rates_jax as rates
-    from vulcan_jax.config import default_config
+    import vulcan3.gibbs as gibbs
+    import vulcan3.network as net_mod
+    import vulcan3.rates_jax as rates
+    from vulcan3.config import default_config
 
     vulcan_cfg = default_config()
 

@@ -28,7 +28,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from vulcan_jax._paths import PACKAGE_ROOT
+from vulcan3._paths import PACKAGE_ROOT
 
 # 3x the worst max |log10(y_jax/y_master)| over cells with master ymix >
 # YMIX_FLOOR (HD189 7.86e-3, W39b 7.72e-3, both HO2). The full-solar Lodders
@@ -56,35 +56,35 @@ from pathlib import Path
 import numpy as np
 import yaml
 
-root = Path(sys.argv[1])       # PACKAGE_ROOT (.../src/vulcan_jax)
+root = Path(sys.argv[1])       # PACKAGE_ROOT (.../src/vulcan3)
 out_npz = Path(sys.argv[2])
 config_name = sys.argv[3]
 abundance = sys.argv[4]
 
 os.chdir(root)
 
-# The network is import-frozen: set $VULCAN_JAX_* from the config's own keys
-# BEFORE importing vulcan_jax so a non-default network is parsed.
+# The network is import-frozen: set $VULCAN3_* from the config's own keys
+# BEFORE importing vulcan3 so a non-default network is parsed.
 raw = yaml.safe_load((root / "configs" / f"{config_name}.yaml").read_text())
-os.environ["VULCAN_JAX_NETWORK"] = raw["network"]
-os.environ["VULCAN_JAX_ATOM_LIST"] = ",".join(raw["atom_list"])
-os.environ["VULCAN_JAX_COM_FILE"] = raw["com_file"]
+os.environ["VULCAN3_NETWORK"] = raw["network"]
+os.environ["VULCAN3_ATOM_LIST"] = ",".join(raw["atom_list"])
+os.environ["VULCAN3_COM_FILE"] = raw["com_file"]
 
-from vulcan_jax.config import default_config, load_config
+from vulcan3.config import default_config, load_config
 
 cfg = default_config()
 for key, value in vars(load_config(config_name)).items():
     setattr(cfg, key, value)
 cfg.fastchem_solar_abundance_file = f"thermo/{abundance}"
 
-from vulcan_jax.runtime_validation import validate_runtime_config
+from vulcan3.runtime_validation import validate_runtime_config
 
-validate_runtime_config(cfg, root)
+validate_runtime_config(cfg)
 
-import vulcan_jax.chem_funs as chem_funs
-from vulcan_jax.atm_setup import Atm
-from vulcan_jax.ini_abun import InitialAbun
-from vulcan_jax.state import _AtmData, _Variables
+import vulcan3.chem_funs as chem_funs
+from vulcan3.atm_setup import Atm
+from vulcan3.ini_abun import InitialAbun
+from vulcan3.state import _AtmData, _Variables
 
 data_var, data_atm = _Variables(), _AtmData()
 make_atm = Atm()
@@ -175,12 +175,12 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-root = Path(sys.argv[1])       # PACKAGE_ROOT (.../src/vulcan_jax)
+root = Path(sys.argv[1])       # PACKAGE_ROOT (.../src/vulcan3)
 os.chdir(root)
 
-from vulcan_jax import ini_abun
-from vulcan_jax.atm_setup import Atm
-from vulcan_jax.state import _AtmData
+from vulcan3 import ini_abun
+from vulcan3.atm_setup import Atm
+from vulcan3.state import _AtmData
 
 make_atm = Atm()
 data_atm = make_atm.load_TPK(make_atm.f_pico(_AtmData()))
@@ -228,8 +228,8 @@ def _master_cfg(master_root: Path, config_name: str, scratch: Path) -> Path:
     which VULCAN-JAX derives from Mp/Rp), and the
     checksummed W39b inputs are staged into the disposable copy.
     """
-    from vulcan_jax.config import load_config
-    from vulcan_jax.phy_const import G_grav
+    from vulcan3.config import load_config
+    from vulcan3.phy_const import G_grav
 
     if config_name != "W39b":
         return master_root / "cfg_examples" / "vulcan_cfg_HD189.py"
@@ -311,7 +311,7 @@ def test_seed_reproduces_its_element_vector_and_normalisation(Tiso) -> None:
     """
     import jax.numpy as jnp
 
-    from vulcan_jax import composition, ini_abun
+    from vulcan3 import composition, ini_abun
 
     Tco, p_bar = _hd189_column()
     if Tiso is not None:
@@ -345,8 +345,8 @@ def test_ratios_path_matches_the_config_path_and_moves_carbon() -> None:
     """
     import jax.numpy as jnp
 
-    from vulcan_jax import composition, ini_abun
-    from vulcan_jax.config import default_config
+    from vulcan3 import composition, ini_abun
+    from vulcan3.config import default_config
 
     cfg = default_config()
     elements = [a for a in cfg.atom_list if a != "H"]
@@ -407,8 +407,8 @@ def test_solver_controls_force_a_retrace() -> None:
     return the all-NaN non-convergence signal."""
     import jax.numpy as jnp
 
-    from vulcan_jax import ini_abun
-    from vulcan_jax.config import default_config
+    from vulcan3 import ini_abun
+    from vulcan3.config import default_config
 
     Tco, p_bar = _hd189_column()
     b = ini_abun._element_vector()
@@ -460,7 +460,7 @@ def test_seed_lane_is_bitwise_the_solo_seed_at_any_batch_width() -> None:
     import jax
     import jax.numpy as jnp
 
-    from vulcan_jax import ini_abun
+    from vulcan3 import ini_abun
 
     Tco, p_bar = _hd189_column()
     p = jnp.asarray(p_bar)
@@ -502,8 +502,8 @@ def test_seed_lane_is_bitwise_the_solo_seed_at_any_batch_width() -> None:
 
 def _hd189_column() -> tuple[np.ndarray, np.ndarray]:
     """The shipped HD189 T-P column as (Tco [K], p [bar])."""
-    from vulcan_jax.atm_setup import Atm
-    from vulcan_jax.state import _AtmData
+    from vulcan3.atm_setup import Atm
+    from vulcan3.state import _AtmData
 
     make_atm = Atm()
     data_atm = make_atm.load_TPK(make_atm.f_pico(_AtmData()))

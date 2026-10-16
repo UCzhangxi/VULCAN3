@@ -34,7 +34,7 @@ from test_vmap_while_loop import (
     _max_rel_diff,
     _pin_cfg,
 )
-from vulcan_jax.outer_loop import _ATM_ARRAY_FIELDS
+from vulcan3.outer_loop import _ATM_ARRAY_FIELDS
 
 # The bound test_vmap_while_loop holds batched-vs-solo to; a refilled lane
 # differs from the plain batch for the same reason (cadence, not fixed point).
@@ -101,7 +101,7 @@ def _out_fn(final):
 @pytest.fixture(scope="module")
 def prepared():
     """(integ, stacked states, stacked atmospheres) for the five profiles."""
-    import vulcan_jax.outer_loop as outer_loop
+    import vulcan3.outer_loop as outer_loop
 
     cfg = _pin_cfg()
     integ = _build_integ()
@@ -150,7 +150,7 @@ def test_queue_jvp_without_refill_is_the_batch_jvp():
     programs cheap."""
     from _helpers import fast_cfg
 
-    from vulcan_jax import outer_loop
+    from vulcan3 import outer_loop
 
     cfg = fast_cfg(count_max=8, nz=12, use_vm_mol=False, use_hybrid_vm_mol=False)
     integ = _build_integ()

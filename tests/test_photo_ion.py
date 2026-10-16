@@ -5,8 +5,8 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import numpy as np
-import vulcan_jax.op_jax as op_jax
-from vulcan_jax.config import default_config
+import vulcan3.op_jax as op_jax
+from vulcan3.config import default_config
 
 vulcan_cfg = default_config()
 
@@ -60,7 +60,7 @@ def main() -> int:
     # PhotoStaticInputs so its lazy `_ensure_photo_static` doesn't try to
     # read a full pre-loop state off the SimpleNamespace.
     import jax.numpy as jnp
-    from vulcan_jax.state import PhotoStaticInputs
+    from vulcan3.state import PhotoStaticInputs
 
     nbin = aflux.shape[1]
     nz = aflux.shape[0]

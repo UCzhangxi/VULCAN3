@@ -23,7 +23,7 @@ warnings.filterwarnings("ignore")
 def test_skip_chem_warmup_runstate_identical():
     """skip_chem_warmup leaves every RunState array leaf byte-identical."""
     import jax
-    from vulcan_jax.state import RunState
+    from vulcan3.state import RunState
 
     # The hook does not depend on the initial abundances, so the 5-mol
     # const_lowT solve stands in for the slower equilibrium seed.

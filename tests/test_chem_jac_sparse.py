@@ -29,10 +29,10 @@ def test_main(hd189_state):
     """chem_jac_analytical vs the jacrev chem_jac on the HD189 state."""
     from _oracles import chem_jac
 
-    import vulcan_jax.chem as chem_mod
+    import vulcan3.chem as chem_mod
     import jax.numpy as jnp
-    import vulcan_jax.network as net_mod
-    from vulcan_jax.config import default_config
+    import vulcan3.network as net_mod
+    from vulcan3.config import default_config
 
     vulcan_cfg = default_config()
 

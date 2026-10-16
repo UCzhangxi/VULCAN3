@@ -17,8 +17,8 @@ import numpy as np
 import jax.numpy as jnp
 import pytest
 
-from vulcan_jax import conden
-from vulcan_jax.phy_const import Navo, kb
+from vulcan3 import conden
+from vulcan3.phy_const import Navo, kb
 
 jax.config.update("jax_enable_x64", True)
 

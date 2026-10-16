@@ -24,8 +24,8 @@ import pytest
     ids=["inert_const_mix_key", "network_const_mix_keys", "unknown_condensate", "h2s_sat_only"],
 )
 def test_up_front_validation(overrides, error):
-    from vulcan_jax import make_config
-    from vulcan_jax.runtime_validation import validate_runtime_config
+    from vulcan3 import make_config
+    from vulcan3.runtime_validation import validate_runtime_config
 
     cfg = make_config(**overrides)
     if error is None:
@@ -38,8 +38,8 @@ def test_up_front_validation(overrides, error):
 def test_kinetics_set_matches_sat_set():
     """The kinetics tier must stay a subset of the saturation tier, and the
     only sat-only species must be H2S (drift guard between the two constants)."""
-    from vulcan_jax.atm_setup import _SUPPORTED_CONDENSABLES
-    from vulcan_jax.conden import SUPPORTED_CONDEN_KINETICS
+    from vulcan3.atm_setup import _SUPPORTED_CONDENSABLES
+    from vulcan3.conden import SUPPORTED_CONDEN_KINETICS
 
     assert set(SUPPORTED_CONDEN_KINETICS) <= set(_SUPPORTED_CONDENSABLES)
     assert set(_SUPPORTED_CONDENSABLES) - set(SUPPORTED_CONDEN_KINETICS) == {"H2S"}

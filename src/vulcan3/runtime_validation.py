@@ -1,7 +1,8 @@
-"""Pre-run configuration validation for the standalone VULCAN-JAX runtime."""
+"""Pre-run configuration validation for the standalone VULCAN3 runtime."""
 
 from __future__ import annotations
 
+import importlib.util
 import logging
 import math
 from pathlib import Path
@@ -9,6 +10,8 @@ from pathlib import Path
 import numpy as np
 
 from . import chem_funs
+from ._paths import resolve_data_path
+from .config import _ELEMENT_RATIO_KEY
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +26,7 @@ def _declared(cfg, key, cast=float):
     return None if v is _ABSENT else cast(v)
 
 
-def _validate_abundance_preset(cfg, root: Path) -> list[str]:
+def _validate_abundance_preset(cfg) -> list[str]:
     """The EQ seed's abundance preset must parse and cover the network.
 
     The file is read as `SYMBOL log10(n_X/n_H)+12` rows. The seed needs a
@@ -36,10 +39,10 @@ def _validate_abundance_preset(cfg, root: Path) -> list[str]:
     from . import ini_abun
 
     rel = getattr(cfg, "fastchem_solar_abundance_file", None)
-    if not rel or not (root / rel).exists():
+    if not rel or not resolve_data_path(rel).exists():
         return []  # unset or missing is reported by the caller
     try:
-        ratios = ini_abun.read_abundances(root / rel)
+        ratios = ini_abun.read_abundances(resolve_data_path(rel))
     except (OSError, ValueError) as exc:
         return [f"abundance preset {rel!r} does not parse: {exc}"]
     bad = [
@@ -58,7 +61,7 @@ def _validate_abundance_preset(cfg, root: Path) -> list[str]:
     return []
 
 
-def _validate_network_assets(cfg, root: Path) -> list[str]:
+def _validate_network_assets(cfg) -> list[str]:
     """Return a list of human-readable errors for missing network-linked assets.
 
     Checks three things that produce cryptic downstream errors if wrong:
@@ -66,17 +69,22 @@ def _validate_network_assets(cfg, root: Path) -> list[str]:
     2. Every photodissociation species has a cross-section file
     (`<cross_folder><sp>/<sp>_cross.csv`).
     3. cfg.atom_list entries are recognised column headers in all_compose.txt.
+    4. Every atom_list element outside loss_ex is carried by some network
+       species: otherwise its initial column is 0 and the per-step atom_loss
+       is 0/0 = NaN, which rejects every step down to dt_min and the run never
+       converges (loss_ex elements are left out of that check).
     """
     errors: list[str] = []
 
-    com_path = root / getattr(cfg, "com_file", "")
+    com_path = resolve_data_path(getattr(cfg, "com_file", ""))
     if not com_path.exists():
         return errors  # file-existence error already captured by caller
 
     # Read species column from composition table.
     with open(com_path) as f:
         header = f.readline().split()
-        compose_species = {line.split()[0] for line in f if line.strip()}
+        rows = {r[0]: r[1:] for r in (line.split() for line in f) if r}
+    compose_species = set(rows)
     compose_atoms = set(header[1:])  # every column after 'species' (elements, 'e', 'mass')
 
     # 1. Every network species must be in the composition table.
@@ -90,7 +98,7 @@ def _validate_network_assets(cfg, root: Path) -> list[str]:
 
     # 2. Photo species need a cross-section file.
     if bool(getattr(cfg, "use_photo", False)):
-        cross_folder = root / getattr(cfg, "cross_folder", "")
+        cross_folder = resolve_data_path(getattr(cfg, "cross_folder", ""))
         for sp in chem_funs._NETWORK.photo_sp:
             cross_csv = cross_folder / sp / f"{sp}_cross.csv"
             if not cross_csv.exists():
@@ -100,6 +108,12 @@ def _validate_network_assets(cfg, root: Path) -> list[str]:
                     f"Add the file or remove {sp!r} from photo reactions."
                 )
 
+    # An `<X>_H` key for a symbol the table lacks is a typo (config.py
+    # accepts any `<X>_H` so a new network's element can carry one).
+    for key in vars(cfg):
+        if _ELEMENT_RATIO_KEY.fullmatch(key) and key[:-2] not in compose_atoms:
+            errors.append(f"{key!r}: {key[:-2]!r} is not an element of {cfg.com_file}.")
+
     # 3. Refuse atom_list entries not in the composition table header.
     for atom in getattr(cfg, "atom_list", []):
         if atom not in compose_atoms:
@@ -107,6 +121,27 @@ def _validate_network_assets(cfg, root: Path) -> list[str]:
                 f"atom_list entry {atom!r} is not a column in {cfg.com_file} "
                 f"(available: {sorted(compose_atoms)}). "
                 f"Update atom_list or add a column to the composition table."
+            )
+            continue
+        # 4. ... and must occur in at least one network species.
+        if atom in getattr(cfg, "loss_ex", []):
+            continue
+        col = header.index(atom) - 1
+        carried = any(
+            float(rows[sp][col]) > 0 for sp in chem_funs.spec_list if sp in rows
+        )
+        # Without use_solar the seed reads `<X>_H` for every carried element
+        # (ini_abun._base_vector).
+        if (carried and atom != "H" and getattr(cfg, "use_solar", True) is not True
+                and not hasattr(cfg, f"{atom}_H")):
+            errors.append(f"use_solar is off and {atom!r} has no `{atom}_H` "
+                          f"(n_{atom}/n_H) in the config.")
+        if not carried:
+            errors.append(
+                f"atom_list entry {atom!r} has no species in network {net_name!r}, "
+                "so its initial column is zero and every step fails the "
+                f"atom-conservation check. Remove {atom!r} from atom_list or "
+                f"use a network with {atom!r} species."
             )
 
     return errors
@@ -415,22 +450,22 @@ def _validate_condensation(cfg) -> list[str]:
     return errors
 
 
-def validate_runtime_config(cfg, root: Path | None = None) -> None:
+def validate_runtime_config(cfg) -> None:
     """Raise RuntimeError if cfg is unsupported or required files are missing.
 
     Aggregates every configuration error (flag consistency, required
     files, network assets, abundance preset, numerical bounds) and raises once
-    so the user sees all problems at once; returns None on success. `root`
-    sets where relative asset paths resolve (defaults to the package dir).
+    so the user sees all problems at once; returns None on success. Relative
+    asset paths resolve as the run resolves them (`resolve_data_path`: the
+    current directory first, then the package data).
     """
-    root = Path(__file__).resolve().parent if root is None else Path(root)
     errors: list[str] = []
     species = set(chem_funs.spec_list)
 
     if bool(getattr(cfg, "use_ion", False)) and not bool(
         getattr(cfg, "use_photo", False)
     ):
-        errors.append("use_ion=True requires use_photo=True in VULCAN-JAX.")
+        errors.append("use_ion=True requires use_photo=True in VULCAN3.")
 
     fix_sp = list(getattr(cfg, "fix_species", []) or [])
     if fix_sp and not bool(getattr(cfg, "use_condense", False)):
@@ -445,8 +480,8 @@ def validate_runtime_config(cfg, root: Path | None = None) -> None:
             errors.append(
                 f"fix_species entries not in the loaded network: {missing}. "
                 f"The network is import-locked, so this cannot be fixed after "
-                f"`import vulcan_jax`: either drop these entries or set "
-                f"$VULCAN_JAX_NETWORK to a network containing them before the "
+                f"`import vulcan3`: either drop these entries or set "
+                f"$VULCAN3_NETWORK to a network containing them before the "
                 f"first import."
             )
 
@@ -505,16 +540,30 @@ def validate_runtime_config(cfg, root: Path | None = None) -> None:
         if not rel_path:
             errors.append(f"{label} is unset.")
             continue
-        if not (root / rel_path).exists():
-            errors.append(f"{label}={rel_path!r} does not exist under {root}.")
+        if not resolve_data_path(rel_path).exists():
+            errors.append(
+                f"{label}={rel_path!r} does not exist in the current directory "
+                "or the package data."
+            )
 
-    errors.extend(_validate_network_assets(cfg, root))
-    errors.extend(_validate_abundance_preset(cfg, root))
+    errors.extend(_validate_network_assets(cfg))
+    errors.extend(_validate_abundance_preset(cfg))
     errors.extend(_validate_numerical_bounds(cfg))
+
+    # Plots run after the solve; refuse a plot request that would fail there.
+    if getattr(cfg, "use_plot_end", False) or getattr(cfg, "use_plot_evo", False):
+        if importlib.util.find_spec("matplotlib") is None:
+            errors.append("use_plot_end / use_plot_evo need matplotlib: "
+                          "pip install 'vulcan3[plot]'.")
+        plot_spec = list(getattr(cfg, "plot_spec", []))
+        missing = [sp for sp in plot_spec if sp not in species]
+        if not plot_spec or missing:
+            errors.append(f"plot_spec {plot_spec} must list species of the "
+                          f"network; not in it: {missing}.")
 
     if errors:
         raise RuntimeError(
-            "Unsupported or invalid VULCAN-JAX runtime configuration:\n- "
+            "Unsupported or invalid VULCAN3 runtime configuration:\n- "
             + "\n- ".join(errors)
         )
 

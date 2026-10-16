@@ -8,7 +8,7 @@ SHA-256 alongside the commit, config, and dependency versions that made it.
 
 The fixtures are required (conftest fails collection when one is missing)
 but gitignored (~36 MB), so a clean clone must regenerate them. The network
-is frozen at the first `import vulcan_jax` and the two adjoint states need
+is frozen at the first `import vulcan3` and the two adjoint states need
 different networks, so each generator runs in its own subprocess. The
 adjoint states each converge a real run (minutes); the photo fixtures are
 fast.
@@ -90,11 +90,11 @@ def _versions() -> dict:
         # Read the source of truth, not the installed dist metadata: under an
         # editable install importlib.metadata reports whatever version was
         # current at `pip install -e`, which silently mislabels every fixture.
-        src = (ROOT / "src" / "vulcan_jax" / "_version.py").read_text()
-        out["vulcan_jax"] = re.search(
+        src = (ROOT / "src" / "vulcan3" / "_version.py").read_text()
+        out["vulcan3"] = re.search(
             r"__version__\s*=\s*[\"']([^\"']+)", src).group(1)
     except Exception:  # best-effort provenance: record None
-        out["vulcan_jax"] = None
+        out["vulcan3"] = None
     return out
 
 
@@ -104,7 +104,7 @@ def _config_identity() -> dict:
     A fixture built from a different config is a different oracle, and the
     failure mode is a confusing numerical mismatch rather than a clear error.
     """
-    cfg_dir = ROOT / "src" / "vulcan_jax" / "configs"
+    cfg_dir = ROOT / "src" / "vulcan3" / "configs"
     out = {}
     for name in ("default.yaml", "W39b.yaml", "HD189.yaml"):
         p = cfg_dir / name
@@ -145,7 +145,7 @@ def write_manifest() -> dict:
             }
     manifest = {
         "generated_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        "vulcan_jax_commit": _git_head(),
+        "vulcan3_commit": _git_head(),
         # Converged states are machine-dependent; record the machine they came from.
         "platform_machine": platform.machine(),
         "versions": _versions(),
@@ -185,7 +185,7 @@ def verify() -> int:
             print(f"  - {b}", file=sys.stderr)
         return 1
     print(f"gen_fixtures: all {len(ALL_FIXTURES)} fixtures match the manifest "
-          f"(built from commit {manifest.get('vulcan_jax_commit')})")
+          f"(built from commit {manifest.get('vulcan3_commit')})")
     return 0
 
 

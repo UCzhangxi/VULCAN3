@@ -4,7 +4,7 @@ name: oracle
 # it builds upstream's FastChem for the EQ-seed agreement test. Also runs
 # test_solver_fast.py on the fixtures built below, and the full tier (every
 # `slow` test, which tests.yml skips).
-# VULCAN_JAX_REQUIRE_ORACLE=1 turns a missing or wrong-revision oracle into a
+# VULCAN3_REQUIRE_ORACLE=1 turns a missing or wrong-revision oracle into a
 # failure instead of a skip.
 
 on:
@@ -56,7 +56,7 @@ jobs:
           test -z "$(git -C "$RUNNER_TEMP/oracle-${{ matrix.family }}" status --porcelain)"
 
       # The .npz fixtures are gitignored; the release gate generates them
-      # rather than set VULCAN_JAX_ALLOW_MISSING_FIXTURES (a skipped oracle
+      # rather than set VULCAN3_ALLOW_MISSING_FIXTURES (a skipped oracle
       # reports green).
       - name: Build the numerical-regression fixtures
         run: python tests/gen_fixtures.py --all
@@ -65,12 +65,12 @@ jobs:
       # output/HD209.vul; the CLI writes it relative to the cwd.
       - name: Converge HD209 (the codegen tests' steady-state oracle)
         if: matrix.family == 'vulcan2_ncho'
-        run: python -m vulcan_jax.vulcan_jax_cli --config HD209
+        run: python -m vulcan3.cli --config HD209
 
       - name: Run the ${{ matrix.family }} comparisons
         env:
           VULCAN_MASTER_DIR: ${{ runner.temp }}/oracle-${{ matrix.family }}
-          VULCAN_JAX_REQUIRE_ORACLE: "1"
+          VULCAN3_REQUIRE_ORACLE: "1"
         run: python -m pytest ${{ matrix.select }} -q --tb=short -ra
 
       # The full tier: the `slow` tests only (the normal tier is tests.yml),
@@ -83,7 +83,7 @@ jobs:
       - name: Full tier
         if: matrix.family == 'vulcan2_ncho'
         env:
-          VULCAN_JAX_RUN_SLOW: "1"
+          VULCAN3_RUN_SLOW: "1"
         run: |
           mapfile -t slow < <(python -m pytest tests -m slow --collect-only -q | grep '::')
           failed=()

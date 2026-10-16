@@ -6,9 +6,9 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from vulcan_jax._paths import PACKAGE_ROOT
-from vulcan_jax.atm_setup import read_sflux_binned
-from vulcan_jax.photo_setup import _make_bins
+from vulcan3._paths import PACKAGE_ROOT
+from vulcan3.atm_setup import read_sflux_binned
+from vulcan3.photo_setup import _make_bins
 
 _SFLUX_FILES = sorted(
     p.name for p in (PACKAGE_ROOT / "atm/stellar_flux").glob("sflux-*.txt")

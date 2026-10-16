@@ -1,5 +1,5 @@
 // CPU reference of the fused block-Thomas factor / solve (solver_fast.py,
-// VULCAN_JAX_SOLVER=ffi). Same math as solver.py, layer by layer:
+// VULCAN3_SOLVER=ffi). Same math as solver.py, layer by layer:
 //   factor:  A'_0 = A_0;  A'_j = A_j - (c_j b_{j-1}^T) .* inv(A'_{j-1});  pivoted LU of each A'_j
 //   solve:   r'_0 = r_0;  r'_j = r_j - c_j .* (A'_{j-1}^{-1} r'_{j-1})
 //            k_last = A'^{-1} r'_last;  k_j = A'_j^{-1} (r'_j - b_j .* k_{j+1})
@@ -9,7 +9,7 @@
 // O(nz ni^3) loops: this is the reference the GPU kernel is checked against,
 // not a fast CPU solver. A zero pivot gives inf/nan like lax.linalg.lu, not an
 // error.
-// Build: python -m vulcan_jax.solver_fast
+// Build: python -m vulcan3.solver_fast
 #include <cmath>
 #include <cstdint>
 #include <utility>

@@ -44,8 +44,8 @@ import numpy as np
 import pytest
 from test_vmap_while_loop import _build_integ, _build_rs, _pin_cfg
 
-from vulcan_jax import outer_loop
-from vulcan_jax.outer_loop import _queue_compact_rungs
+from vulcan3 import outer_loop
+from vulcan3.outer_loop import _queue_compact_rungs
 
 TISO = (900.0, 1000.0, 1100.0, 1200.0, 1300.0)
 # Per-job step caps (the carry's count_max_dyn) so the lanes end at different
@@ -142,7 +142,7 @@ def photo_off():
 
 
 def test_ladder_parsing_and_config_key():
-    from vulcan_jax.config import load_config, validate_overrides
+    from vulcan3.config import load_config, validate_overrides
 
     assert _queue_compact_rungs(None, 792) == ()
     assert _queue_compact_rungs([], 792) == ()

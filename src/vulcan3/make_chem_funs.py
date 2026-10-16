@@ -9,7 +9,7 @@ of `is_three_body[i+1]`). Source is written to
 returns a JIT'd `vmap`'d `Callable` with signature
 `(y[nz, ni], M[nz], k[nr+1, nz]) -> dydt[nz, ni]`.
 
-`$VULCAN_JAX_CHEM_RHS=grouped` (import-frozen; default `codegen`) selects
+`$VULCAN3_CHEM_RHS=grouped` (import-frozen; default `codegen`) selects
 `build_chem_rhs_grouped`: the same per-element operation trees, evaluated
 as ~20 vectorised gathers instead of one expression per reaction.
 """
@@ -28,10 +28,10 @@ import numpy as np
 
 from .network import Network
 
-CHEM_RHS_IMPL = os.environ.get("VULCAN_JAX_CHEM_RHS", "codegen")  # import-frozen
+CHEM_RHS_IMPL = os.environ.get("VULCAN3_CHEM_RHS", "codegen")  # import-frozen
 if CHEM_RHS_IMPL not in ("codegen", "grouped"):
     raise ValueError(
-        f"VULCAN_JAX_CHEM_RHS={CHEM_RHS_IMPL!r}: expected 'codegen' (default) or 'grouped'"
+        f"VULCAN3_CHEM_RHS={CHEM_RHS_IMPL!r}: expected 'codegen' (default) or 'grouped'"
     )
 
 
@@ -169,7 +169,7 @@ def build_chem_rhs(net: Network) -> Callable:
     Returns a `jax.jit`'d callable with signature
     `(y[nz, ni], M[nz], k[nr+1, nz]) -> dydt[nz, ni]`. The XLA-compiled
     artifact is reused across processes via JAX's persistent disk cache
-    (configured in `vulcan_jax_cli.py`). The Python source cache file under
+    (configured in `cli.py`). The Python source cache file under
     `__pycache__/` is for human inspection: `cat` it to compare against
     VULCAN-master's `chem_funs.py` reaction lambdas.
     """

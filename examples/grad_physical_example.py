@@ -34,16 +34,16 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-import vulcan_jax.network as _net_mod
-import vulcan_jax.chem as _chem_mod
-from vulcan_jax.config import default_config
-from vulcan_jax.atm_jax import (
+import vulcan3.network as _net_mod
+import vulcan3.chem as _chem_mod
+from vulcan3.config import default_config
+from vulcan3.atm_jax import (
     AtmSpec,
     PhysicalInputs,
     build_atm_static,
     pco_from_endpoints,
 )
-from vulcan_jax.composition import compo, compo_row, species
+from vulcan3.composition import compo, compo_row, species
 
 
 def _central_fd(f, x, eps):

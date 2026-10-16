@@ -11,7 +11,7 @@ from __future__ import annotations
 import jax
 import jax.numpy as jnp
 import numpy as np
-import vulcan_jax.photo as photo_mod
+import vulcan3.photo as photo_mod
 
 # Roundoff bars, relative to the largest entry of the sequential result.
 BAR_RANDOM = 1e-12
@@ -89,8 +89,8 @@ def test_associative_sweeps_match_sequential():
 
 def test_associative_sweeps_on_hd189_state(hd189_state):
     """Real HD189 photo state: same fluxes, and no while loop in the lowering."""
-    from vulcan_jax import phy_const
-    from vulcan_jax.config import default_config
+    from vulcan3 import phy_const
+    from vulcan3.config import default_config
 
     cfg = default_config()
 

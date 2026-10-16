@@ -11,11 +11,11 @@ def _check_gradient():
     import jax
     import jax.numpy as jnp
     import numpy as np
-    from vulcan_jax.config import load_config
-    from vulcan_jax.state import RunState
-    from vulcan_jax.op_jax import Ros2JAX
-    from vulcan_jax.outer_loop import OuterLoop
-    from vulcan_jax.legacy_io import Output
+    from vulcan3.config import load_config
+    from vulcan3.state import RunState
+    from vulcan3.op_jax import Ros2JAX
+    from vulcan3.outer_loop import OuterLoop
+    from vulcan3.legacy_io import Output
 
     jax.config.update("jax_enable_x64", True)
     cfg = load_config("default", use_photo=False, use_print_prog=False,

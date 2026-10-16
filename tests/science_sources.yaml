@@ -72,7 +72,7 @@ oracles:
 # ---------------------------------------------------------------------------
 # The files this port carries faithfully and the only ones
 # tools/audit_master_parity.py compares (upstream trees carry networks this
-# release does not). sha256 is of the file as vendored under src/vulcan_jax/.
+# release does not). sha256 is of the file as vendored under src/vulcan3/.
 supported_inputs:
 
   thermo/NCHO_photo_network.txt:
@@ -240,7 +240,7 @@ intentional_divergences:
       species to hold the oxygen. Upstream ships Lodders 2009 at solar. This is
       a config choice, not a correction: both files ship and
       `fastchem_solar_abundance_file` selects.
-    recorded_in: fastchem_solar_abundance_file in src/vulcan_jax/configs/*.yaml
+    recorded_in: fastchem_solar_abundance_file in src/vulcan3/configs/*.yaml
 
   nh3_ice_mass:
     reason: >-
@@ -252,7 +252,7 @@ intentional_divergences:
     reason: >-
       Upstream build_atm.py:857 converts the cmHg H2S saturation fit with
       0.001333, the mmHg factor (10x low); VULCAN-JAX uses 0.01333.
-    recorded_in: src/vulcan_jax/atm_setup.py::_CMHG_TO_BAR
+    recorded_in: src/vulcan3/atm_setup.py::_CMHG_TO_BAR
 
   controller_defaults:
     reason: >-

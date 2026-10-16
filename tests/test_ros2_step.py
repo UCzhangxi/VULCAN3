@@ -28,7 +28,7 @@ def main() -> int:
     os.chdir(VULCAN_MASTER)
     sys.path.insert(0, str(VULCAN_MASTER))
 
-    from vulcan_jax.config import default_config
+    from vulcan3.config import default_config
 
     cfg_v = default_config()
     import store as st_v
@@ -73,9 +73,9 @@ def main() -> int:
         sys.path.remove(str(VULCAN_MASTER))
     os.chdir(ROOT)
 
-    import vulcan_jax.chem_funs as chem_funs
+    import vulcan3.chem_funs as chem_funs
     import jax.numpy as jnp
-    from vulcan_jax.jax_step import jax_ros2_step, make_atm_static
+    from vulcan3.jax_step import jax_ros2_step, make_atm_static
 
     nz, ni = y0.shape
 

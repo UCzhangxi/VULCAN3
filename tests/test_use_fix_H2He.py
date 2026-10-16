@@ -16,7 +16,7 @@ from _helpers import set_cfg
 
 
 def test_use_fix_h2he_pins_the_bottom_ratios():
-    import vulcan_jax.chem_funs as chem_funs
+    import vulcan3.chem_funs as chem_funs
 
     species = list(chem_funs.spec_list)
     if "H2" not in species or "He" not in species:
@@ -24,10 +24,10 @@ def test_use_fix_h2he_pins_the_bottom_ratios():
 
     cfg = set_cfg(use_fix_H2He=True, count_max=5, count_min=1, use_print_prog=False)
 
-    import vulcan_jax.legacy_io as op
-    import vulcan_jax.op_jax as op_jax
-    import vulcan_jax.outer_loop as outer_loop
-    from vulcan_jax.state import RunState
+    import vulcan3.legacy_io as op
+    import vulcan3.op_jax as op_jax
+    import vulcan3.outer_loop as outer_loop
+    from vulcan3.state import RunState
 
     rs = RunState.with_pre_loop_setup(cfg)
     # Seed t past 1e6 so the trip fires on the first accepted step.

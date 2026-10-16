@@ -1,4 +1,4 @@
-"""Default block-Thomas path (`VULCAN_JAX_SOLVER=fast|ffi`, import-frozen).
+"""Default block-Thomas path (`VULCAN3_SOLVER=fast|ffi`, import-frozen).
 
 Same call shape as `solver.py`: `factor(diag, sup_d, sub_d)` once, then
 `solve(factors, rhs)` for each Ros2 stage. Two things differ from the plain
@@ -10,8 +10,8 @@ Same call shape as `solver.py`: `factor(diag, sup_d, sub_d)` once, then
    primal is the same code on the same inputs and is
    bit-identical. Reverse mode transposes the primal sweep on the same
    factors.
-2. With `VULCAN_JAX_SOLVER=ffi` the raw factor and solve are one C++ call each
-   (`csrc/block_thomas_cpu.cc`, built by `python -m vulcan_jax.solver_fast`):
+2. With `VULCAN3_SOLVER=ffi` the raw factor and solve are one C++ call each
+   (`csrc/block_thomas_cpu.cc`, built by `python -m vulcan3.solver_fast`):
    the CPU reference for the fused GPU kernel. `custom_linear_solve` makes
    these calls, which have no AD rules, differentiable. Reverse mode runs the
    JAX transpose sweep on the kernel's factors (`transpose_solve` below).
@@ -21,13 +21,13 @@ factor launch and two solve launches per Ros2 step, with the CPU kernel's
 factor format and its results to roundoff (not bitwise). Its header gives the
 launch layouts and the two per-call choices: the factor kernel (Gauss-Jordan
 up to ni = 96, LU above) and the LU factor's and the solve's one- or
-two-buffer variant. `VULCAN_JAX_BT_FACTOR=gj|lu` and
-`VULCAN_JAX_BT_BUFFERS=1|2` force them; both are read once per process. It
-is built only by `python -m vulcan_jax.solver_fast --cuda` on a host with
-nvcc; without the library nothing changes here and a device call under `ffi`
-fails loudly at dispatch.
+two-buffer variant. `VULCAN3_BT_FACTOR=gj|lu` and `VULCAN3_BT_BUFFERS=1|2`
+force them; both are read once per process. It is built only by
+`python -m vulcan3.solver_fast --cuda` on a host with nvcc; without the
+library nothing changes here and a device call under `ffi` fails loudly at
+dispatch.
 
-`jax_step` imports this module by default; `VULCAN_JAX_SOLVER=reference`
+`jax_step` imports this module by default; `VULCAN3_SOLVER=reference`
 restores the plain `solver.py` pair for A/B, and `ffi` selects the C++ kernel.
 """
 
@@ -50,10 +50,10 @@ import jax.numpy as jnp
 
 from . import solver as _ref
 
-BACKEND = os.environ.get("VULCAN_JAX_SOLVER", "fast")
+BACKEND = os.environ.get("VULCAN3_SOLVER", "fast")
 if BACKEND not in ("fast", "ffi"):
     raise ValueError(
-        f"VULCAN_JAX_SOLVER={BACKEND!r}: expected 'fast' (default), 'ffi', "
+        f"VULCAN3_SOLVER={BACKEND!r}: expected 'fast' (default), 'ffi', "
         "or 'reference' (handled in jax_step)"
     )
 
@@ -218,7 +218,7 @@ def _register():
         raise RuntimeError(
             f"{_CUDA_LIB} was not built from the present {cu_src.name} and "
             "block_thomas_common.h; rebuild it on the GPU host with `python -m "
-            "vulcan_jax.solver_fast --cuda`, or delete it to run the CPU kernel only."
+            "vulcan3.solver_fast --cuda`, or delete it to run the CPU kernel only."
         )
     lib = ctypes.CDLL(str(build()))
     jax.ffi.register_ffi_target(

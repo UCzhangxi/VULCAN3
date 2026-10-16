@@ -14,8 +14,8 @@ from types import SimpleNamespace
 import jax.numpy as jnp
 import pytest
 
-from vulcan_jax.runtime_validation import _validate_condensation
-from vulcan_jax.steady_state_grad import BodyTerms, steady_state_input_sensitivity
+from vulcan3.runtime_validation import _validate_condensation
+from vulcan3.steady_state_grad import BodyTerms, steady_state_input_sensitivity
 
 
 def _cfg(**overrides):

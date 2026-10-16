@@ -10,10 +10,10 @@ def test_vmapped_step_matches_single_step(hd189_state):
     import jax
     import jax.numpy as jnp
 
-    import vulcan_jax.chem as chem_mod
-    import vulcan_jax.jax_step as js_mod
-    import vulcan_jax.network as net_mod
-    from vulcan_jax.config import default_config
+    import vulcan3.chem as chem_mod
+    import vulcan3.jax_step as js_mod
+    import vulcan3.network as net_mod
+    from vulcan3.config import default_config
 
     y0 = jnp.asarray(np.asarray(hd189_state.var.y, dtype=np.float64))
     k_arr = jnp.asarray(np.asarray(hd189_state.var.k_arr, dtype=np.float64))
