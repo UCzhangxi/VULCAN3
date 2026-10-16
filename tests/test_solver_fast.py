@@ -266,7 +266,7 @@ jax.config.update("jax_enable_x64", True)
 import vulcan3.solver_fast as fast_mod
 dev = jax.devices("cuda")[0]
 # ni 89 and 97 (SNCHO, DMS) in the one-buffer run only: two buffers exceed a sm_89 card
-one_buf = os.environ["VULCAN_JAX_BT_BUFFERS"] == "1"
+one_buf = os.environ["VULCAN3_BT_BUFFERS"] == "1"
 for nz, ni in [(1, 5), (3, 16), (4, 33), (6, 64)] + [(3, 89), (2, 97)] * one_buf:
     rng = np.random.default_rng(ni)
     d, s, c, r = (jax.device_put(jnp.asarray(a), dev) for a in (
@@ -294,7 +294,7 @@ def test_cuda_kernel_under_compute_sanitizer(tool, buffers):
         pytest.skip(f"{fast_mod._CUDA_LIB.name} not built (python -m vulcan3.solver_fast --cuda)")
     env = {k: v for k, v in os.environ.items() if k != "JAX_PLATFORMS"}
     env.update(XLA_PYTHON_CLIENT_ALLOCATOR="platform", XLA_PYTHON_CLIENT_PREALLOCATE="false",
-               XLA_FLAGS="--xla_gpu_enable_command_buffer=", VULCAN_JAX_BT_BUFFERS=buffers)
+               XLA_FLAGS="--xla_gpu_enable_command_buffer=", VULCAN3_BT_BUFFERS=buffers)
     res = subprocess.run([exe, "--tool", tool, "--error-exitcode", "1", sys.executable, "-c",
                           _SANITIZER_CHILD], capture_output=True, text=True, env=env, timeout=600)
     assert res.returncode == 0, res.stdout[-4000:] + res.stderr[-4000:]
@@ -302,7 +302,7 @@ def test_cuda_kernel_under_compute_sanitizer(tool, buffers):
 
 # The one- and two-buffer CUDA kernels run the same operations in the same
 # order, so their outputs must be equal byte for byte, nan payloads included.
-# VULCAN_JAX_BT_BUFFERS is read once per process, so each variant runs in its
+# VULCAN3_BT_BUFFERS is read once per process, so each variant runs in its
 # own child; the child captures the stage-1 systems on the CPU and returns
 # them too, so the comparison also proves both children solved the same bytes.
 BUFFER_DTS = (3.8e4, 1e6, 1e11)
@@ -349,7 +349,7 @@ def buffer_variants(tmp_path_factory):
         out, tmp = {}, tmp_path_factory.mktemp(net)
         for buffers in ("2", "1"):
             env = {k: v for k, v in os.environ.items() if k != "JAX_PLATFORMS"}
-            env.update(net_env, VULCAN_JAX_BT_BUFFERS=buffers)
+            env.update(net_env, VULCAN3_BT_BUFFERS=buffers)
             path = tmp / f"buffers{buffers}.npz"
             res = subprocess.run([sys.executable, "-c", _BUFFERS_CHILD, str(ROOT), fixture, net,
                                   str(path)], capture_output=True, text=True, env=env, cwd=ROOT,

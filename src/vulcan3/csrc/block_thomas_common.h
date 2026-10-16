@@ -1,7 +1,7 @@
 // Shape checks and rhs broadcasting shared by block_thomas_cpu.cc and
 // block_thomas_cuda.cu. Each library is one translation unit.
-#ifndef VULCAN_JAX_CSRC_BLOCK_THOMAS_COMMON_H_
-#define VULCAN_JAX_CSRC_BLOCK_THOMAS_COMMON_H_
+#ifndef VULCAN3_CSRC_BLOCK_THOMAS_COMMON_H_
+#define VULCAN3_CSRC_BLOCK_THOMAS_COMMON_H_
 
 #include <algorithm>
 #include <cstddef>
@@ -21,7 +21,7 @@
 // sha256 of the sources, set by solver_fast.build. The loader finds it in the
 // library file to tell a stale build from a current one.
 #ifndef VULCAN_BT_SOURCE_HASH
-#error "build with python -m vulcan_jax.solver_fast, which defines VULCAN_BT_SOURCE_HASH"
+#error "build with python -m vulcan3.solver_fast, which defines VULCAN_BT_SOURCE_HASH"
 #endif
 #define BT_STRINGIFY_(x) #x
 #define BT_STRINGIFY(x) BT_STRINGIFY_(x)
@@ -185,4 +185,4 @@ BT_HOST_DEVICE inline int64_t bt_index(int64_t b, const BtBcast& s, BtOperand op
 
 }  // namespace vulcan_bt
 
-#endif  // VULCAN_JAX_CSRC_BLOCK_THOMAS_COMMON_H_
+#endif  // VULCAN3_CSRC_BLOCK_THOMAS_COMMON_H_

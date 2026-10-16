@@ -75,11 +75,7 @@ _FROZEN_ENV = {
 
 # The VULCAN_JAX_* variables are VULCAN3_* now; one still exported would be
 # ignored (a job asking for VULCAN_JAX_SOLVER=fast would run the default).
-# VULCAN_JAX_BT_BUFFERS keeps its name: the CUDA kernel reads it.
-_OLD_ENV = sorted(
-    k for k in os.environ
-    if k.startswith("VULCAN_JAX_") and k != "VULCAN_JAX_BT_BUFFERS"
-)
+_OLD_ENV = sorted(k for k in os.environ if k.startswith("VULCAN_JAX_"))
 if _OLD_ENV:
     raise ImportError(
         f"{_OLD_ENV} were renamed: use the VULCAN3_ prefix "

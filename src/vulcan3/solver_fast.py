@@ -18,9 +18,8 @@ Same call shape as `solver.py`: `factor(diag, sup_d, sub_d)` once, then
 
 On a CUDA device the `ffi` backend runs `csrc/block_thomas_cuda.cu` (its
 header gives the launch layout and the one/two-buffer choice;
-`VULCAN_JAX_BT_BUFFERS=1|2` forces a variant; the kernel reads that name,
-and renaming it would change the source hash every built library carries):
-one factor launch and two solve launches per Ros2 step. It is built only by `python -m vulcan3.solver_fast
+`VULCAN3_BT_BUFFERS=1|2` forces a variant): one factor launch and two
+solve launches per Ros2 step. It is built only by `python -m vulcan3.solver_fast
 --cuda` on a host with nvcc; without the library nothing changes here and a
 device call under `ffi` fails loudly at dispatch.
 

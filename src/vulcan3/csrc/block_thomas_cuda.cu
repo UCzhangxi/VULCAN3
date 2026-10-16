@@ -1,4 +1,4 @@
-// CUDA twin of block_thomas_cpu.cc (VULCAN_JAX_SOLVER=ffi on a GPU): the same
+// CUDA twin of block_thomas_cpu.cc (VULCAN3_SOLVER=ffi on a GPU): the same
 // block-Thomas factor and solve on [..., nz, ni, ni] blocks, with the same perm
 // convention (perm[i] = source row of permuted row i). Launch: one thread block
 // per batch element, 2 ni threads rounded up to a warp, the whole nz sweep inside
@@ -6,11 +6,11 @@
 // ni x ni double blocks of shared memory plus O(ni) (about 125 KB at ni = 89),
 // or one (about 63 KB), which fits more blocks on an SM. A call takes two
 // buffers when they fit the device and need no more waves than one
-// (bt_choose); VULCAN_JAX_BT_BUFFERS=1 or 2 forces a variant. Shared memory is
+// (bt_choose); VULCAN3_BT_BUFFERS=1 or 2 forces a variant. Shared memory is
 // opted in to the device maximum. The solve keeps
 // each lane's substitution rows in registers, so it takes ni <= 128 and refuses
 // more. A zero pivot gives inf/nan like lax.linalg.lu, not an error. Build:
-// python -m vulcan_jax.solver_fast --cuda.
+// python -m vulcan3.solver_fast --cuda.
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
@@ -496,12 +496,12 @@ ffi::Error bt_shared_fits(size_t bytes, const BtOptIn& opt) {
   return ffi::Error::Success();
 }
 
-// VULCAN_JAX_BT_BUFFERS, read once per process: unset or empty picks the
+// VULCAN3_BT_BUFFERS, read once per process: unset or empty picks the
 // variant per call (bt_choose); "1" or "2" forces the one- or two-buffer
 // kernels, for the A/B and the byte-identity test.
 const char* bt_forced_buffers() {
   static const char* const v = [] {
-    const char* e = std::getenv("VULCAN_JAX_BT_BUFFERS");
+    const char* e = std::getenv("VULCAN3_BT_BUFFERS");
     return (e == nullptr) ? "" : e;
   }();
   return v;
@@ -525,7 +525,7 @@ ffi::Error bt_choose(int device, int64_t batch, const void* two, size_t shmem2, 
   if (std::strcmp(forced, "1") == 0 || std::strcmp(forced, "2") == 0) {
     *one_buf = forced[0] == '1';
   } else if (forced[0] != '\0') {
-    return ffi::Error::InvalidArgument(std::string("VULCAN_JAX_BT_BUFFERS=") + forced +
+    return ffi::Error::InvalidArgument(std::string("VULCAN3_BT_BUFFERS=") + forced +
                                        ": expected 1, 2 or unset");
   } else if (shmem2 > static_cast<size_t>(opt.limit)) {
     *one_buf = true;
