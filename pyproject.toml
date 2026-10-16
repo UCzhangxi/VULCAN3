@@ -68,6 +68,10 @@ vulcan3 = [
     "atm/**/*",
     "thermo/**/*",
     "configs/*.yaml",
+    # the `ffi` solver compiles these on first use (solver_fast.build)
+    "csrc/*.cc",
+    "csrc/*.cu",
+    "csrc/*.h",
 ]
 
 [tool.setuptools.exclude-package-data]
