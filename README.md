@@ -76,6 +76,16 @@ that nearly cancel that is a large relative difference, and two CPU
 consistency tests with 1e-12 bars (`test_vmap_kernels` for the RHS,
 `test_vmap_step` for `delta`) fail with it set. It is therefore opt-in.
 
+`queue_compact` (config; `[]`, off, by default) shortens the tail of a
+`run_queue` batch. Once no job is waiting and the live lanes fit the next
+width in the list, they move to a narrower compiled program and continue from
+the same tick, so the few slow columns no longer hold the full width. Each
+column's arithmetic, cadence and certificate are unchanged. With
+`[264, 132]` on 792 lanes, a 2376-column WASP-39 b batch on a GH200 gives
+bitwise the same columns and diagnostics, and its first pass takes 344 s
+instead of 520 s. Below about 64 lanes, XLA's per-lane arithmetic can change
+in the last bits.
+
 ## Example
 
 Run the default HD 189733 b model from Python and plot the converged
