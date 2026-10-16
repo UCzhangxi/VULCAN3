@@ -66,6 +66,16 @@ network (89 species, 396 columns) the factorization and the two solves of a
 step take 24.5 ms instead of 39.0 ms, and a whole step 60.7 ms instead of
 75.2 ms. `VULCAN_JAX_BT_FACTOR=lu` selects the LU kernel for any network.
 
+`VULCAN_JAX_CHEM_RHS=grouped` (also read at first import) evaluates the
+chemistry right-hand side as one vectorised gather per reaction signature
+instead of one expression per reaction. The operation trees are the same, so
+on a GH200 the batched WASP-39 b runner gives bitwise the same columns; it
+cuts the transposes XLA inserts under the lane vmap. Other compiled programs
+can differ in the last bits, from XLA's fused multiply-add choices; on cells
+that nearly cancel that is a large relative difference, and two CPU
+consistency tests with 1e-12 bars (`test_vmap_kernels` for the RHS,
+`test_vmap_step` for `delta`) fail with it set. It is therefore opt-in.
+
 ## Example
 
 Run the default HD 189733 b model from Python and plot the converged

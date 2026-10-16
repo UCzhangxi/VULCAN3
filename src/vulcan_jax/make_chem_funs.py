@@ -8,6 +8,10 @@ of `is_three_body[i+1]`). Source is written to
 `__pycache__/chem_rhs_codegen_<hash>.py` for inspection; `build_chem_rhs`
 returns a JIT'd `vmap`'d `Callable` with signature
 `(y[nz, ni], M[nz], k[nr+1, nz]) -> dydt[nz, ni]`.
+
+`$VULCAN_JAX_CHEM_RHS=grouped` (import-frozen; default `codegen`) selects
+`build_chem_rhs_grouped`: the same per-element operation trees, evaluated
+as ~20 vectorised gathers instead of one expression per reaction.
 """
 
 from __future__ import annotations
@@ -19,8 +23,16 @@ from pathlib import Path
 from typing import Any, Callable
 
 import jax
+import jax.numpy as jnp
+import numpy as np
 
 from .network import Network
+
+CHEM_RHS_IMPL = os.environ.get("VULCAN_JAX_CHEM_RHS", "codegen")  # import-frozen
+if CHEM_RHS_IMPL not in ("codegen", "grouped"):
+    raise ValueError(
+        f"VULCAN_JAX_CHEM_RHS={CHEM_RHS_IMPL!r}: expected 'codegen' (default) or 'grouped'"
+    )
 
 
 def _emit_rate_term(net: Network, slot_i: int, max_terms: int, PAD: int) -> str:
@@ -161,6 +173,8 @@ def build_chem_rhs(net: Network) -> Callable:
     `__pycache__/` is for human inspection: `cat` it to compare against
     VULCAN-master's `chem_funs.py` reaction lambdas.
     """
+    if CHEM_RHS_IMPL == "grouped":
+        return build_chem_rhs_grouped(net)
     key = chem_rhs_cache_key(net)
     cached = _BUILD_CACHE.get(key)
     if cached is not None:
@@ -192,5 +206,152 @@ def build_chem_rhs(net: Network) -> Callable:
         return jax.lax.optimization_barrier(raw_fn(y, M, k))
 
     fn = jax.jit(chem_rhs_codegen_barriered)
+    _BUILD_CACHE[key] = fn
+    return fn
+
+
+# --- Grouped evaluation of the same RHS --------------------------------------
+
+
+def _rate_factors(net: Network, slot_i: int, max_terms: int, PAD: int) -> tuple[list, bool]:
+    """Species factors of rate slot `slot_i` in `_emit_rate_term` order (stoich
+    expanded: `H + H` gives `[H, H]`) and its three-body flag."""
+    out: list[int] = []
+    for kslot in range(max_terms):
+        sp = int(net.reactant_idx[slot_i, kslot])
+        st = int(net.reactant_stoich[slot_i, kslot])
+        if st == 0 or sp == PAD:
+            continue
+        out.extend([sp] * st)
+    return out, bool(net.is_three_body[slot_i])
+
+
+def grouped_rhs_tables(net: Network) -> tuple[list, list, np.ndarray]:
+    """Static tables of `chem_rhs_grouped_column`.
+
+    Rates: the reaction pairs `v_i` (i = 1, 3, ...) bucketed by signature
+    (forward factor count, forward three-body, reverse factor count, reverse
+    three-body). Within a bucket every `v_i` has the operation tree the
+    codegen emits, `((k[i]*y[a])*y[b])*M - (k[i+1]*y[c])*y[d]`, so one
+    vectorised expression per bucket evaluates it element for element.
+    Each entry is `(sig, kf, ff, kr, rr)`: forward / reverse rate rows and
+    their (n, n_factors) species tables; `V` rows follow bucket order.
+
+    Species: each species' signed term list in `emit_chem_rhs_source` order
+    (reaction order, products then reactants, repeated by stoich), bucketed by
+    power-of-two padded length. A term is `sign * V[row]` with sign +-1.0
+    (exact); pads point at a `-0.0` row, the exact additive identity, so a
+    padded left-to-right sum equals the codegen's `+1.0*v_a -1.0*v_b ...`
+    bit for bit. Each bucket is `(idx, sign)` of shape (n_species, width);
+    `place[s]` is species s's row in the concatenated bucket output.
+    """
+    ni, nr = int(net.ni), int(net.nr)
+    PAD = ni
+    max_terms = net.reactant_idx.shape[1]
+    sig_members: dict[tuple, list] = {}
+    for i in range(1, nr + 1, 2):
+        f, fm = _rate_factors(net, i, max_terms, PAD)
+        r, rm = _rate_factors(net, i + 1, max_terms, PAD)
+        sig_members.setdefault((len(f), fm, len(r), rm), []).append((i, f, r))
+    rate_groups = []
+    row_of: dict[int, int] = {}
+    for sig in sorted(sig_members):
+        mem = sig_members[sig]
+        kf = np.asarray([i for i, _, _ in mem], dtype=np.int32)
+        ff = np.asarray([f for _, f, _ in mem], dtype=np.int32).reshape(len(mem), sig[0])
+        rr = np.asarray([r for _, _, r in mem], dtype=np.int32).reshape(len(mem), sig[2])
+        rate_groups.append((sig, kf, ff, kf + 1, rr))
+        for i, _, _ in mem:
+            row_of[i] = len(row_of)
+    zero_row, neg_zero_row = len(row_of), len(row_of) + 1
+
+    terms: list[list] = [[] for _ in range(ni)]
+    for i in range(1, nr + 1, 2):
+        for kslot in range(net.product_idx.shape[1]):
+            sp = int(net.product_idx[i, kslot])
+            st = int(net.product_stoich[i, kslot])
+            if st == 0 or sp == PAD:
+                continue
+            terms[sp].extend([(row_of[i], 1.0)] * st)
+        for kslot in range(max_terms):
+            sp = int(net.reactant_idx[i, kslot])
+            st = int(net.reactant_stoich[i, kslot])
+            if st == 0 or sp == PAD:
+                continue
+            terms[sp].extend([(row_of[i], -1.0)] * st)
+    for sp in range(ni):
+        if not terms[sp]:
+            terms[sp] = [(zero_row, 1.0)]  # the codegen's literal `0.0`
+    order = sorted(range(ni), key=lambda s: (len(terms[s]), s))
+    buckets = []
+    place = np.empty(ni, dtype=np.int32)
+    start = 0
+    while start < ni:
+        width = 1 << (len(terms[order[start]]) - 1).bit_length()
+        end = start
+        while end < ni and len(terms[order[end]]) <= width:
+            end += 1
+        idx = np.full((end - start, width), neg_zero_row, dtype=np.int32)
+        sgn = np.ones((end - start, width), dtype=np.float64)
+        for a, s in enumerate(order[start:end]):
+            for b, (row, sg) in enumerate(terms[s]):
+                idx[a, b], sgn[a, b] = row, sg
+            place[s] = start + a
+        buckets.append((idx, sgn))
+        start = end
+    return rate_groups, buckets, place
+
+
+def chem_rhs_grouped_column(y: Any, M: Any, k: Any, tables: tuple) -> Any:
+    """The codegen RHS for one column, layer axis trailing: `(y[nz, ni],
+    M[nz], k[nr+1, nz]) -> dydt[nz, ni]`, bit-identical to
+    `chem_rhs_per_layer_codegen` vmapped over layers.
+
+    Every read is a whole-row gather (`k[rows]`, `y.T[rows]`, `V[rows]`), so
+    under the batched runner's lane vmap XLA emits one kernel per signature
+    bucket and per species bucket instead of one per reaction.
+    """
+    rate_groups, buckets, place = tables
+    nz = y.shape[0]
+    Y = y.T  # (ni, nz)
+    parts = []
+    for (n_f, m_f, n_r, m_r), kf, ff, kr, rr in rate_groups:
+        F = k[kf]
+        for c in range(n_f):
+            F = F * Y[ff[:, c]]
+        if m_f:
+            F = F * M
+        R = k[kr]
+        for c in range(n_r):
+            R = R * Y[rr[:, c]]
+        if m_r:
+            R = R * M
+        parts.append(F - R)
+    parts.append(jnp.zeros((1, nz), dtype=y.dtype))
+    parts.append(jnp.full((1, nz), -0.0, dtype=y.dtype))
+    V = jnp.concatenate(parts, axis=0)
+    sums = []
+    for idx, sgn in buckets:
+        acc = sgn[:, 0, None] * V[idx[:, 0]]
+        for t in range(1, idx.shape[1]):
+            acc = acc + sgn[:, t, None] * V[idx[:, t]]
+        sums.append(acc)
+    return jnp.concatenate(sums, axis=0)[place].T
+
+
+def build_chem_rhs_grouped(net: Network) -> Callable:
+    """`build_chem_rhs` with `chem_rhs_grouped_column` as the evaluator: same
+    signature, same fence, same values (bit for bit)."""
+    key = "grouped:" + chem_rhs_cache_key(net)
+    cached = _BUILD_CACHE.get(key)
+    if cached is not None:
+        return cached
+    tables = grouped_rhs_tables(net)
+
+    def chem_rhs_grouped_barriered(y: Any, M: Any, k: Any) -> Any:
+        """Fence the RHS output, as `build_chem_rhs` does."""
+        return jax.lax.optimization_barrier(chem_rhs_grouped_column(y, M, k, tables))
+
+    fn = jax.jit(chem_rhs_grouped_barriered)
     _BUILD_CACHE[key] = fn
     return fn

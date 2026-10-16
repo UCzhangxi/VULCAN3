@@ -191,7 +191,79 @@ def _left_to_right_sum(x: jnp.ndarray) -> jnp.ndarray:
     return acc
 
 
-chem_jac_analytical = jax.vmap(
-    chem_jac_analytical_per_layer,
-    in_axes=(0, 0, 1, None),
-)
+def _left_to_right_sum_axis1(x: jnp.ndarray) -> jnp.ndarray:
+    """`_left_to_right_sum` over axis 1 (the term axis of a column table)."""
+    acc = x[:, 0]
+    for j in range(1, x.shape[1]):
+        acc = acc + x[:, j]
+    return acc
+
+
+def chem_jac_entries(
+    y: jnp.ndarray,  # [nz, ni]
+    M: jnp.ndarray,  # [nz]
+    k: jnp.ndarray,  # [nr+1, nz]
+    net: NetworkArrays,
+) -> jnp.ndarray:
+    """The nonzero entries of the analytical Jacobian for a whole column,
+    [n_entries + 1, nz] in `net.jac_place` row order, the last row zero (the
+    structural-zero slot). `chem_jac_analytical` scatters them densely.
+
+    The same operations on the same operands in the same order as
+    `chem_jac_analytical_per_layer` vmapped over layers (bitwise equal),
+    with the layer axis trailing every intermediate instead of leading it.
+    Under the batched runner's lane vmap that keeps (reaction, slot) major
+    and (lane, layer) contiguous, so each per-entry gather reads whole rows;
+    the per-layer form's (lane, layer, reaction, slot) layout made every
+    gathered element its own memory sector (~4.6 ms a step at 396 lanes on
+    a GH200).
+    """
+    nz = y.shape[0]
+    yp = jnp.concatenate([y.T, jnp.ones((1, nz), dtype=y.dtype)], axis=0)  # [ni+1, nz]
+    st = net.reactant_stoich[:, :, None]  # [nr+1, max_terms, 1]
+
+    y_r = yp[net.reactant_idx]  # [nr+1, max_terms, nz]
+    factor_l = jnp.where(st > 0, y_r**st, 1.0)
+
+    # Leave-one-out product in slot order: the per-layer `jnp.prod` of the
+    # slot-j-is-1.0 row is ((1*f0)*f1)*f2 with the excluded factor 1.0, i.e.
+    # the remaining factors multiplied left to right.
+    max_terms = net.reactant_idx.shape[1]
+    leave_out_cols = []
+    for j in range(max_terms):
+        acc = None
+        for slot in range(max_terms):
+            if slot != j:
+                acc = factor_l[:, slot] if acc is None else acc * factor_l[:, slot]
+        leave_out_cols.append(jnp.ones_like(factor_l[:, 0]) if acc is None else acc)
+    leave_out = jnp.stack(leave_out_cols, axis=1)
+
+    # AD-safe power rule, as in the per-layer form.
+    safe_exp = jnp.where(net.reactant_stoich > 1, net.reactant_stoich - 1, 1)[:, :, None]
+    pow_minus_one = jnp.where(
+        st >= 2,
+        y_r**safe_exp,
+        jnp.where(st == 1, 1.0, 0.0),
+    )
+    drate_dy = st * pow_minus_one * leave_out * k[:, None, :]
+    drate_dy = jnp.where(net.is_three_body[:, None, None], drate_dy * M, drate_dy)
+
+    entry_sums = [
+        _left_to_right_sum_axis1(coef[:, :, None] * drate_dy[r, s])
+        for r, s, coef in net.jac_terms
+    ]
+    zero = jnp.zeros((1, nz), dtype=drate_dy.dtype)
+    return jnp.concatenate([*entry_sums, zero], axis=0)
+
+
+def chem_jac_analytical(
+    y: jnp.ndarray,  # [nz, ni]
+    M: jnp.ndarray,  # [nz]
+    k: jnp.ndarray,  # [nr+1, nz]
+    net: NetworkArrays,
+) -> jnp.ndarray:
+    """`chem_jac_analytical_per_layer` for a whole column. Returns [nz, ni, ni],
+    bitwise equal to the per-layer form vmapped over layers."""
+    nz, ni = y.shape[0], net.ni
+    dense = chem_jac_entries(y, M, k, net)[net.jac_place]  # [ni*ni, nz]
+    return jnp.moveaxis(dense.reshape(ni, ni, nz), -1, 0)
