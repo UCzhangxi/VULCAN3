@@ -150,12 +150,51 @@ def cli_main(argv=None):
     integ = outer_loop.OuterLoop(solver, output, cfg=cfg)
 
     print(f"VULCAN-JAX starting integration at t=0, dt={float(runstate.step.dt):.2e}")
-    runstate = integ(runstate)
+    try:
+        # Chunked so Ctrl+C lands between chunks (`OuterLoop.__call__`).
+        runstate = integ(runstate, chunk=int(cfg.print_prog_num))
+    except KeyboardInterrupt:
+        if integ.interrupted_runstate is not None:
+            runstate = integ.interrupted_runstate
+            print(
+                f"\nInterrupted. `runstate` is the last finished chunk "
+                f"(step {int(runstate.params.count)}, t={float(runstate.step.t):.3e} s)."
+            )
+        else:
+            print("\nInterrupted before the first chunk finished; `runstate` "
+                  "is the initial state.")
+        print("`output.save_out(runstate, dname)` writes it as a .vul; "
+              "Ctrl-D quits.")
+        _drop_into_repl(
+            dict(cfg=cfg, runstate=runstate, integ=integ, output=output,
+                 dname=dname)
+        )
+        return
 
     print(f"VULCAN-JAX done. Saving output to {cfg.output_dir}{cfg.out_name}")
     output.save_out(runstate, dname)
+    if cfg.use_plot_end:
+        output.plot_end(runstate)
+    if cfg.use_plot_evo:
+        output.plot_evo(runstate)
 
     print(f"Total wall time: {time.time() - runstate.metadata.start_time:.1f}s")
+
+
+def _drop_into_repl(namespace):
+    """IPython if installed, else the standard console with line editing."""
+    try:
+        from IPython import embed
+    except ImportError:
+        import code
+
+        try:
+            import readline  # noqa: F401  (arrow keys and history in `code`)
+        except ImportError:
+            pass
+        code.interact(local=namespace)
+    else:
+        embed(user_ns=namespace, colors="neutral")
 
 
 if __name__ == "__main__":

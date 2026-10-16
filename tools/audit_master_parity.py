@@ -67,7 +67,11 @@ KNOWN_SFLUX_RESCALES: dict[str, float] = {
     "sflux-epseri.txt": EPS_ERI_RSTAR_RSUN**-4,
 }
 
-UI_OUTPUT_KEYS = {"output_dir", "out_name", "save_evolution", "save_evo_frq"}
+UI_OUTPUT_KEYS = {
+    "output_dir", "out_name", "save_evolution", "save_evo_frq",
+    "print_prog_num", "use_plot_end", "use_plot_evo",
+    "plot_dir", "plot_spec",
+}
 
 IGNORED_RUNTIME_FILENAMES = {".DS_Store"}
 # .md files are docs, not runtime data (master carries two thermo READMEs).
@@ -161,11 +165,13 @@ def _compare_cfgs(master_cfg: Path) -> list[str]:
                 )
 
     # Master keys absent in JAX are drift, except config._REMOVED_KEYS (gs
-    # among them: JAX derives it from Mp/Rp).
-    from vulcan_jax.config import _REMOVED_KEYS
+    # among them: JAX derives it from Mp/Rp) and the display-only keys JAX
+    # drops (config._IGNORED_KEYS).
+    from vulcan_jax.config import _IGNORED_KEYS, _REMOVED_KEYS
 
     missing_in_jax = sorted(
         set(master) - set(jax) - UI_OUTPUT_KEYS - set(_REMOVED_KEYS)
+        - _IGNORED_KEYS
     )
     if missing_in_jax:
         errors.append(f"JAX cfg missing master keys: {missing_in_jax}")

@@ -17,6 +17,7 @@ import functools
 import os
 import re
 import types
+import warnings
 from importlib import resources
 from pathlib import Path
 from typing import Any
@@ -123,28 +124,34 @@ _REMOVED_KEYS: dict[str, str] = {
         ("use_pi_controller", "pi_controller_alpha", "pi_controller_beta"),
         "the master-faithful I-controller is the only dt control; remove the key",
     ),
-    **dict.fromkeys(
-        (
-            "plot_dir", "movie_dir", "plot_TP", "use_live_plot", "use_live_flux",
-            "use_plot_end", "use_plot_evo", "use_save_movie", "use_flux_movie",
-            "plot_height", "use_PIL", "live_plot_frq", "save_movie_rate",
-            "y_time_freq", "plot_spec",
-        ),
-        "VULCAN-JAX has no plotter or live UI; plot the `.vul` output with "
-        "VULCAN's plot_py/ scripts and remove the key",
-    ),
-    "print_prog_num": (
-        "`use_print_prog` prints one progress block at the end of the run; "
+    "use_allFC_ele": (
+        "the equilibrium seed carries only the network's own elements; "
         "remove the key"
     ),
-    "output_humanread": "the `.vul` output is always a pickle; remove the key",
-    "use_shark": "there is no end-of-run shark message; remove the key",
+    "wall_clock_max": (
+        "a run ends on the convergence certificate, `count_max` or `runtime`; "
+        "remove the key"
+    ),
+    "use_chunked_runner": (
+        "the CLI always runs in chunks of `print_prog_num` steps; from Python "
+        "call `integ(rs, chunk=N)`; remove the key"
+    ),
     "ode_solver": "Ros2 is the only solver; remove the key",
     "gibbs_text": (
         "reverse rates read thermo/NASA9/<species>.txt (gibbs.py); remove "
         "the key"
     ),
 }
+
+
+# Master's display-only keys (live plot, movies, text output). They change
+# nothing in a run, so a master-style config warns and drops them instead of
+# failing.
+_IGNORED_KEYS = frozenset((
+    "movie_dir", "plot_TP", "use_live_plot", "use_live_flux", "use_save_movie",
+    "use_flux_movie", "plot_height", "use_PIL", "live_plot_frq",
+    "save_movie_rate", "y_time_freq", "output_humanread", "use_shark",
+))
 
 
 @functools.cache
@@ -167,18 +174,27 @@ def _packaged_defaults() -> dict[str, Any]:
     return yaml.load(pkg.read_text(), Loader=_StrictLoader)
 
 
-def _validate_keys(d: dict[str, Any], source: str) -> None:
-    """Reject removed or unknown config keys before they silently do nothing."""
+def _validate_keys(d: dict[str, Any], source: str) -> list[str]:
+    """Reject removed or unknown config keys before they silently do nothing;
+    warn about display-only keys and return them for the caller to drop."""
     removed = sorted(k for k in d if k in _REMOVED_KEYS)
     if removed:
         detail = "; ".join(f"`{k}` -- {_REMOVED_KEYS[k]}" for k in removed)
         raise ValueError(f"{source}: uses removed config key(s): {detail}.")
-    unknown = sorted(set(d) - _known_config_keys())
+    ignored = sorted(k for k in d if k in _IGNORED_KEYS)
+    if ignored:
+        warnings.warn(
+            f"{source}: ignoring display-only key(s) {ignored}; VULCAN-JAX has "
+            "no live plot, movie or text output.",
+            stacklevel=3,
+        )
+    unknown = sorted(set(d) - _known_config_keys() - _IGNORED_KEYS)
     if unknown:
         raise ValueError(
             f"{source}: unknown config key(s) {unknown}. Every knob is declared in "
             "vulcan_jax/configs/default.yaml -- check for a typo or a renamed knob."
         )
+    return ignored
 
 
 def validate_overrides(overrides: dict[str, Any]) -> None:
@@ -270,7 +286,8 @@ def load_config(
     d: dict[str, Any] = {**copy.deepcopy(_packaged_defaults()), **raw}
     _apply_frozen_env(d)
     d.update(overrides)
-    _validate_keys(d, f"config {name_or_path!r}")
+    for key in _validate_keys(d, f"config {name_or_path!r}"):
+        del d[key]
     _resolve_derived(d)
     return Config(**d)
 

@@ -555,3 +555,90 @@ class Output(object):
                 outfile,
                 protocol=4,
             )
+
+    # Post-run plotters (master's Output.plot_end / plot_evo, restyled): PNGs
+    # in `plot_dir`. matplotlib is the optional `plot` extra, imported here so
+    # a run without plots never needs it.
+
+    def plot_end(self, rs):
+        """Final mixing ratios of `cfg.plot_spec` against pressure, saved
+        to `plot_dir/mix.png`."""
+        p_bar = np.asarray(rs.atm.pco) / 1.0e6
+        ymix = np.asarray(rs.step.ymix)
+        self._plot_species(
+            lambda i: (ymix[:, i], p_bar), "mix.png", "mixing ratio",
+            "pressure (bar)", mix_axis=0, other_lim=(p_bar.max(), p_bar.min()),
+        )
+
+    def plot_evo(self, rs):
+        """Mixing ratios of `cfg.plot_spec` against model time in the layer
+        nearest `_EVO_P_BAR`, from the `save_evo_frq` snapshots, saved to
+        `plot_dir/evo.png`."""
+        t_evo = np.asarray(rs.step.t_evo)
+        if t_evo.size == 0:
+            raise ValueError(
+                "plot_evo needs the evolution snapshots; set save_evolution "
+                "or use_plot_evo before the run."
+            )
+        p_bar = np.asarray(rs.atm.pco) / 1.0e6
+        j = int(np.argmin(np.abs(np.log(p_bar / _EVO_P_BAR))))
+        ymix = np.asarray(rs.step.y_evo)[:, j, :] / float(np.asarray(rs.atm.n_0)[j])
+        self._plot_species(
+            lambda i: (t_evo, ymix[:, i]), "evo.png", "time (s)",
+            f"mixing ratio at {p_bar[j]:.1e} bar", mix_axis=1,
+            other_lim=(t_evo.min(), t_evo.max()),
+        )
+
+    def _plot_species(self, xy, name, xlabel, ylabel, mix_axis, other_lim):
+        """One log-log line per `cfg.plot_spec` species, `xy(index) -> (x, y)`.
+        The mixing-ratio axis (`mix_axis` 0 = x, 1 = y) spans the plotted
+        values, floored at `_PLOT_YMIN`."""
+        plt = _import_plt()
+        curves = [(sp, xy(species.index(sp))) for sp in self._cfg.plot_spec]
+        mix = np.concatenate([c[mix_axis] for _, c in curves])
+        mix = mix[mix > _PLOT_YMIN]
+        mix_lim = (mix.min(), mix.max()) if mix.size else (_PLOT_YMIN, 1.0)
+        with plt.rc_context(_RC):
+            fig, ax = plt.subplots(figsize=(6.5, 6.5))
+            for k, (sp, c) in enumerate(curves):
+                ax.plot(*c, label=sp, color=_CYCLE[k % len(_CYCLE)],
+                        ls=_STYLES[k // len(_CYCLE) % len(_STYLES)])
+            ax.set_xscale("log")
+            ax.set_yscale("log")
+            ax.set_box_aspect(1)
+            ax.set_xlim(*(mix_lim if mix_axis == 0 else other_lim))
+            ax.set_ylim(*(other_lim if mix_axis == 0 else mix_lim))
+            ax.set_xlabel(xlabel)
+            ax.set_ylabel(ylabel)
+            ax.legend(frameon=False, fontsize=10, loc="best")
+            os.makedirs(self._cfg.plot_dir, exist_ok=True)
+            path = os.path.join(self._cfg.plot_dir, name)
+            fig.savefig(path, dpi=300, bbox_inches="tight")
+        plt.close(fig)
+        logger.info(f"Plot saved to {path}")
+
+
+# Okabe-Ito colours, then matplotlib's own dash and dot for more species.
+_CYCLE = ["#0072B2", "#D55E00", "#009E73", "#E69F00", "#CC79A7", "#56B4E9"]
+_STYLES = ["-", "--", ":"]
+# Mixing-ratio axis floor (master's plot_end xlim).
+_PLOT_YMIN = 1.0e-20
+# plot_evo's layer: the one nearest 1 mbar, where transmission spectra form.
+_EVO_P_BAR = 1.0e-3
+# Serif text, ticks inward on all four sides; applied to these figures only.
+_RC = {
+    "font.family": "serif", "xtick.direction": "in", "ytick.direction": "in",
+    "xtick.top": True, "ytick.right": True, "axes.grid": False,
+}
+
+
+def _import_plt():
+    """matplotlib's pyplot, or a pointer to the `plot` extra."""
+    try:
+        import matplotlib.pyplot as plt
+    except ImportError as exc:
+        raise ImportError(
+            "use_plot_end / use_plot_evo need matplotlib: pip install "
+            "'vulcan-jax[plot]'"
+        ) from exc
+    return plt

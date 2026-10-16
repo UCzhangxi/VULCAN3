@@ -117,6 +117,9 @@ use_sat_surfaceH2O: false
 st_factor: 0.5
 conv_step: 500
 use_print_prog: true
+# The CLI runs in chunks of this many steps: a progress block after each
+# (with use_print_prog), and Ctrl+C keeps the last finished chunk.
+print_prog_num: 500
 dttry: 1.0e-10
 trun_min: 100.0
 runtime: 1.0e+22
@@ -175,3 +178,15 @@ use_fix_all_bot: false
 use_fix_H2He: false
 save_evolution: false
 save_evo_frq: 10
+# End-of-run plots (needs matplotlib): final mixing ratios (plot_end) and
+# their evolution at 1 mbar (plot_evo), for plot_spec, to plot_dir.
+use_plot_end: false
+use_plot_evo: false
+plot_dir: plot/
+plot_spec:
+- H2O
+- CH4
+- CO
+- CO2
+- NH3
+- HCN
