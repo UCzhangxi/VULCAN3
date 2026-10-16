@@ -54,6 +54,27 @@ _NET_JAX = _chem_funs._NET_JAX
 _QUEUE_REFILL_CHUNK = 8
 _QUEUE_REFILL_EVERY = 100
 
+
+def _queue_compact_rungs(spec, n_lanes) -> tuple:
+    """run_queue's tail-compaction ladder (config `queue_compact`): the
+    distinct lane counts of `spec` below `n_lanes`, widest first. A rung at
+    or above the lane count is dropped, so one ladder serves every queue
+    width; None or empty is no compaction."""
+    if spec is None:
+        return ()
+    if isinstance(spec, (int, np.integer)) or isinstance(spec, (str, bytes)):
+        raise ValueError(
+            f"queue_compact must be a list of lane counts, got {spec!r}"
+        )
+    rungs = []
+    for r in spec:
+        if isinstance(r, (bool, np.bool_)) or not isinstance(r, (int, np.integer)) or r < 1:
+            raise ValueError(
+                f"queue_compact: every rung must be an int >= 1, got {r!r} in {spec!r}"
+            )
+        rungs.append(int(r))
+    return tuple(sorted({r for r in rungs if r < int(n_lanes)}, reverse=True))
+
 # The loose convergence branch's slope threshold (s^-1), master's conv()
 # (exoclime@80f75b9 op.py:1028-1029): min over the interfaces of
 # Kzz / (0.1 Hp)^2, capped at 1e-8 and floored at 1e-10.
@@ -1830,7 +1851,8 @@ def _make_runner(
         )
         return final_b
 
-    def runner_queue(jobs, n_lanes, chunk, init_fn, out_fn):
+    def runner_queue(jobs, n_lanes, chunk, init_fn, out_fn, compact=(),
+                     stats=False):
         """The loop behind `OuterLoop.run_queue` (contract there).
 
         Finished lanes are written out and refilled inside this one while
@@ -1841,6 +1863,16 @@ def _make_runner(
         0`, always true at tick 0) from `body_fn_batch`'s gate inside that
         step, as in `runner_batch`; off its cadence at entry, or it would
         step on the previous occupant's RT state.
+
+        `compact` (`_queue_compact_rungs`: descending widths below
+        `n_lanes`) adds tail compaction; `()` is the loop above, unchanged.
+        Once every job has been handed to a lane and the live lanes (holding
+        a job, not done) fit the next rung, the loop exits and the live lanes
+        are gathered into a carry of that width, which runs the same lane
+        step from the same tick with no refill, and so on down the ladder.
+        The done lanes still holding a job are written out at the gather with
+        the frozen state the final flush would write. `stats=True` also
+        returns, per rung, the tick and the live-lane count at its gather.
         """
         sizes = {
             jnp.shape(x)[0]
@@ -1993,11 +2025,87 @@ def _make_runner(
             live = jnp.logical_not(lanes.is_done) & (lane_job >= 0)
             return (nxt < jnp.int32(n_jobs)) | jnp.any(live)
 
-        it, lanes, _atm_l, lane_job, _nxt, out = jax.lax.while_loop(
-            cond, body, (jnp.int32(0), lanes, atm_l, lane_job, nxt, out)
+        if not compact:
+            it, lanes, _atm_l, lane_job, _nxt, out = jax.lax.while_loop(
+                cond, body, (jnp.int32(0), lanes, atm_l, lane_job, nxt, out)
+            )
+            # Flush the lanes still holding a job when the loop ended.
+            out = write_out(out, lanes, j0, lane_job, lane_job >= 0)
+            if stats:
+                none = jnp.zeros((0,), jnp.int32)
+                return out, it, {"rungs": none, "tick": none, "live": none}
+            return out, it
+
+        # ---- tail compaction (see the docstring)
+        def n_live(lanes, lane_job):
+            return jnp.sum(
+                jnp.logical_not(lanes.is_done) & (lane_job >= 0), dtype=jnp.int32
+            )
+
+        def until(width):
+            """`cond`, also ending once no job is pending and the live lanes
+            fit `width` (None: the last rung, run to the end)."""
+            if width is None:
+                return cond
+
+            def f(c):
+                _it, lanes, _atm_l, lane_job, nxt, _out = c
+                fits = (nxt >= jnp.int32(n_jobs)) & (
+                    n_live(lanes, lane_job) <= jnp.int32(width)
+                )
+                return cond(c) & jnp.logical_not(fits)
+
+            return f
+
+        def tail_body(c):
+            # `body` with nothing pending: its refill cond is never taken, so
+            # the tail loops leave it (and the init_fn it traces) out.
+            it, lanes, atm_l, lane_job, nxt, out = c
+            lanes = lane_step(it, lanes, with_atm(atm_l))
+            lanes = lanes._replace(**{
+                f: jax.lax.stop_gradient(getattr(lanes, f))
+                for f in _QUEUE_STOP_FIELDS
+            })
+            return (it + jnp.int32(1), lanes, atm_l, lane_job, nxt, out)
+
+        def gather(c, width_from, width_to):
+            """Write out the done lanes holding a job, then keep the live
+            lanes (lane order) in a carry of `width_to` lanes; the slots
+            past them take done lanes, frozen and holding no job."""
+            it, lanes, atm_l, lane_job, nxt, out = c
+            idx = jnp.arange(width_from, dtype=jnp.int32)
+            live = jnp.logical_not(lanes.is_done) & (lane_job >= 0)
+            out = write_out(out, lanes, idx, lane_job, (lane_job >= 0) & lanes.is_done)
+            order = jnp.logical_not(live).astype(jnp.int32) * jnp.int32(width_from) + idx
+            sel = jnp.argsort(order)[:width_to]
+            keep = live[sel]
+            lanes = jax.tree_util.tree_map(lambda x: x[sel], lanes)
+            atm_l = jax.tree_util.tree_map(lambda x: x[sel], atm_l)
+            lanes = lanes._replace(is_done=lanes.is_done | jnp.logical_not(keep))
+            lane_job = jnp.where(keep, lane_job[sel], jnp.int32(-1))
+            return (it, lanes, atm_l, lane_job, nxt, out)
+
+        c = jax.lax.while_loop(
+            until(compact[0]), body, (jnp.int32(0), lanes, atm_l, lane_job, nxt, out)
         )
-        # Flush the lanes still holding a job when the loop ended.
-        out = write_out(out, lanes, j0, lane_job, lane_job >= 0)
+        entry_tick, entry_live = [], []
+        width = n_lanes
+        for k, rung in enumerate(compact):
+            entry_tick.append(c[0])
+            entry_live.append(n_live(c[1], c[3]))
+            c = gather(c, width, rung)
+            width = rung
+            nxt_rung = compact[k + 1] if k + 1 < len(compact) else None
+            c = jax.lax.while_loop(until(nxt_rung), tail_body, c)
+        it, lanes, _atm_l, lane_job, _nxt, out = c
+        out = write_out(out, lanes, jnp.arange(width, dtype=jnp.int32), lane_job,
+                        lane_job >= 0)
+        if stats:
+            return out, it, {
+                "rungs": jnp.asarray(compact, jnp.int32),
+                "tick": jnp.stack(entry_tick),
+                "live": jnp.stack(entry_live),
+            }
         return out, it
 
     return runner, runner_batch, runner_queue, _make_runner_jvp
@@ -3250,7 +3358,8 @@ class OuterLoop:
             self._vrunner = jax.jit(self._runner_batch)
         return self._vrunner(states_batched, atm_static_batched)
 
-    def run_queue(self, init_fn, jobs, n_lanes, out_fn, *, chunk=_QUEUE_REFILL_CHUNK):
+    def run_queue(self, init_fn, jobs, n_lanes, out_fn, *, chunk=_QUEUE_REFILL_CHUNK,
+                  compact=None, return_stats=False):
         """Integrate `n_jobs` independent profiles on `n_lanes` lanes with refill.
 
         `init_fn(job) -> (JaxIntegState, AtmStatic)` builds one job's initial
@@ -3270,6 +3379,20 @@ class OuterLoop:
         and geometry cadences. A job stopped by `count_max` is `is_done` like
         a converged one and is refilled. Requires `prepare_runstate` to have built the runner for this nz /
         toggle-combo, like `run_batch`.
+
+        Tail compaction: `compact` (default: the config's `queue_compact`, off
+        when empty) is a ladder of narrower lane counts, e.g. `(264, 132)` on
+        792 lanes. Once no job is pending and the live lanes fit a rung, they
+        continue in a program of that width from the same tick (no refill), so
+        the tail of a few slow jobs stops paying for the full width. Freeze-on-
+        done keeps a done lane out of every lane-uniform photolysis / refresh
+        predicate, so dropping it changes no live lane's step: each job's
+        result is the uncompacted one, bitwise wherever the compiled step's
+        per-lane arithmetic does not depend on the width (the GPU validation
+        checks it). Rungs at or above `n_lanes` are dropped; each rung used
+        adds one compiled loop to the program. `return_stats=True` returns
+        `(out, n_iter, stats)` with, per rung used, the tick and live-lane
+        count at its gather.
         """
         if self._runner_queue is None:
             raise RuntimeError(
@@ -3278,9 +3401,15 @@ class OuterLoop:
             )
         # The callables are part of the key, not their `id`s: holding them
         # keeps a dead closure's id from being reused by a new one.
-        key = (init_fn, out_fn, int(n_lanes), int(chunk))
+        if compact is None:
+            compact = getattr(self._cfg, "queue_compact", None)
+        rungs = _queue_compact_rungs(compact, n_lanes)
+        key = (init_fn, out_fn, int(n_lanes), int(chunk), rungs, bool(return_stats))
         fn = self._vrunner_queue.get(key)
         if fn is None:
+            if rungs:
+                logger.info(f"run_queue: tail compaction {int(n_lanes)} -> "
+                            f"{' -> '.join(str(r) for r in rungs)} lanes")
             fn = jax.jit(
                 functools.partial(
                     self._runner_queue,
@@ -3288,6 +3417,8 @@ class OuterLoop:
                     chunk=int(chunk),
                     init_fn=init_fn,
                     out_fn=out_fn,
+                    compact=rungs,
+                    stats=bool(return_stats),
                 )
             )
             self._vrunner_queue[key] = fn

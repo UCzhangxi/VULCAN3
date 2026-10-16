@@ -159,6 +159,10 @@ adapt_rtol_loss_mul: 2.0
 adapt_rtol_inc_loss_thresh: 0.0002
 # 110 so `dt < dt_min` ends a reject chain, as master does.
 batch_max_retries: 110
+# OuterLoop.run_queue tail compaction (no physics): once no job is pending
+# and the live lanes fit a rung, they continue at that narrower width,
+# e.g. [264, 132] on 792 lanes. [] is off.
+queue_compact: []
 step_size_safety: 0.9
 step_size_zero_delta_frac: 0.01
 photo_switch_longdydt_thresh: 1.0e-06
