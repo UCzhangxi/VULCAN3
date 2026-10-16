@@ -154,6 +154,11 @@ _IGNORED_KEYS = frozenset((
 ))
 
 
+# `<X>_H` elemental ratios: default.yaml declares the shipped elements; a
+# network carrying another element (P, Na, ...) reads its own `<X>_H`.
+_ELEMENT_RATIO_KEY = re.compile(r"[A-Z][a-z]?_H")
+
+
 @functools.cache
 def _known_config_keys() -> frozenset[str]:
     """Canonical set of accepted config keys.
@@ -188,7 +193,10 @@ def _validate_keys(d: dict[str, Any], source: str) -> list[str]:
             "no live plot, movie or text output.",
             stacklevel=3,
         )
-    unknown = sorted(set(d) - _known_config_keys() - _IGNORED_KEYS)
+    unknown = sorted(
+        k for k in set(d) - _known_config_keys() - _IGNORED_KEYS
+        if not _ELEMENT_RATIO_KEY.fullmatch(k)
+    )
     if unknown:
         raise ValueError(
             f"{source}: unknown config key(s) {unknown}. Every knob is declared in "

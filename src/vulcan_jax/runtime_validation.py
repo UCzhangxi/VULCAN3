@@ -67,6 +67,9 @@ def _validate_network_assets(cfg) -> list[str]:
     2. Every photodissociation species has a cross-section file
     (`<cross_folder><sp>/<sp>_cross.csv`).
     3. cfg.atom_list entries are recognised column headers in all_compose.txt.
+    4. Every atom_list element is carried by some network species: otherwise
+       its initial column is 0 and the per-step atom_loss is 0/0 = NaN, which
+       rejects every step down to dt_min and the run never converges.
     """
     errors: list[str] = []
 
@@ -77,7 +80,8 @@ def _validate_network_assets(cfg) -> list[str]:
     # Read species column from composition table.
     with open(com_path) as f:
         header = f.readline().split()
-        compose_species = {line.split()[0] for line in f if line.strip()}
+        rows = {r[0]: r[1:] for r in (line.split() for line in f) if r}
+    compose_species = set(rows)
     compose_atoms = set(header[1:])  # every column after 'species' (elements, 'e', 'mass')
 
     # 1. Every network species must be in the composition table.
@@ -108,6 +112,18 @@ def _validate_network_assets(cfg) -> list[str]:
                 f"atom_list entry {atom!r} is not a column in {cfg.com_file} "
                 f"(available: {sorted(compose_atoms)}). "
                 f"Update atom_list or add a column to the composition table."
+            )
+            continue
+        # 4. ... and must occur in at least one network species.
+        col = header.index(atom) - 1
+        if not any(
+            float(rows[sp][col]) > 0 for sp in chem_funs.spec_list if sp in rows
+        ):
+            errors.append(
+                f"atom_list entry {atom!r} has no species in network {net_name!r}, "
+                "so its initial column is zero and every step fails the "
+                f"atom-conservation check. Remove {atom!r} from atom_list or "
+                f"use a network with {atom!r} species."
             )
 
     return errors
