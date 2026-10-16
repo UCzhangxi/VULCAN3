@@ -57,7 +57,7 @@ cfg.runtime = 1.0e22
 
 from vulcan_jax.runtime_validation import validate_runtime_config
 
-validate_runtime_config(cfg, root=pkg_root)
+validate_runtime_config(cfg)
 
 # Full pre-loop pipeline (atm + rates + initial abundance + photo
 # cross-sections + sflux + remove pass) in one call.

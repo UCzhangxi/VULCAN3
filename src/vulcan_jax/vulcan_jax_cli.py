@@ -33,7 +33,6 @@ from . import op_jax
 from . import outer_loop
 from .runtime_validation import validate_runtime_config
 from .state import RunState
-from ._paths import PACKAGE_ROOT
 
 # Set on the re-executed process by `_relaunch_for_frozen_knobs` so a relaunch
 # that fails to resolve the mismatch raises instead of looping.
@@ -130,7 +129,7 @@ def cli_main(argv=None):
     # Before any validation: a config naming a non-default network can only be
     # honored by a process that imported vulcan_jax with it already selected.
     _relaunch_for_frozen_knobs(cfg, args.config)
-    validate_runtime_config(cfg, PACKAGE_ROOT)
+    validate_runtime_config(cfg)
 
     runstate = RunState.with_pre_loop_setup(cfg)
 

@@ -9,6 +9,7 @@ from pathlib import Path
 import numpy as np
 
 from . import chem_funs
+from ._paths import resolve_data_path
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +24,7 @@ def _declared(cfg, key, cast=float):
     return None if v is _ABSENT else cast(v)
 
 
-def _validate_abundance_preset(cfg, root: Path) -> list[str]:
+def _validate_abundance_preset(cfg) -> list[str]:
     """The EQ seed's abundance preset must parse and cover the network.
 
     The file is read as `SYMBOL log10(n_X/n_H)+12` rows. The seed needs a
@@ -36,10 +37,10 @@ def _validate_abundance_preset(cfg, root: Path) -> list[str]:
     from . import ini_abun
 
     rel = getattr(cfg, "fastchem_solar_abundance_file", None)
-    if not rel or not (root / rel).exists():
+    if not rel or not resolve_data_path(rel).exists():
         return []  # unset or missing is reported by the caller
     try:
-        ratios = ini_abun.read_abundances(root / rel)
+        ratios = ini_abun.read_abundances(resolve_data_path(rel))
     except (OSError, ValueError) as exc:
         return [f"abundance preset {rel!r} does not parse: {exc}"]
     bad = [
@@ -58,7 +59,7 @@ def _validate_abundance_preset(cfg, root: Path) -> list[str]:
     return []
 
 
-def _validate_network_assets(cfg, root: Path) -> list[str]:
+def _validate_network_assets(cfg) -> list[str]:
     """Return a list of human-readable errors for missing network-linked assets.
 
     Checks three things that produce cryptic downstream errors if wrong:
@@ -69,7 +70,7 @@ def _validate_network_assets(cfg, root: Path) -> list[str]:
     """
     errors: list[str] = []
 
-    com_path = root / getattr(cfg, "com_file", "")
+    com_path = resolve_data_path(getattr(cfg, "com_file", ""))
     if not com_path.exists():
         return errors  # file-existence error already captured by caller
 
@@ -90,7 +91,7 @@ def _validate_network_assets(cfg, root: Path) -> list[str]:
 
     # 2. Photo species need a cross-section file.
     if bool(getattr(cfg, "use_photo", False)):
-        cross_folder = root / getattr(cfg, "cross_folder", "")
+        cross_folder = resolve_data_path(getattr(cfg, "cross_folder", ""))
         for sp in chem_funs._NETWORK.photo_sp:
             cross_csv = cross_folder / sp / f"{sp}_cross.csv"
             if not cross_csv.exists():
@@ -415,15 +416,15 @@ def _validate_condensation(cfg) -> list[str]:
     return errors
 
 
-def validate_runtime_config(cfg, root: Path | None = None) -> None:
+def validate_runtime_config(cfg) -> None:
     """Raise RuntimeError if cfg is unsupported or required files are missing.
 
     Aggregates every configuration error (flag consistency, required
     files, network assets, abundance preset, numerical bounds) and raises once
-    so the user sees all problems at once; returns None on success. `root`
-    sets where relative asset paths resolve (defaults to the package dir).
+    so the user sees all problems at once; returns None on success. Relative
+    asset paths resolve as the run resolves them (`resolve_data_path`: the
+    current directory first, then the package data).
     """
-    root = Path(__file__).resolve().parent if root is None else Path(root)
     errors: list[str] = []
     species = set(chem_funs.spec_list)
 
@@ -505,11 +506,14 @@ def validate_runtime_config(cfg, root: Path | None = None) -> None:
         if not rel_path:
             errors.append(f"{label} is unset.")
             continue
-        if not (root / rel_path).exists():
-            errors.append(f"{label}={rel_path!r} does not exist under {root}.")
+        if not resolve_data_path(rel_path).exists():
+            errors.append(
+                f"{label}={rel_path!r} does not exist in the current directory "
+                "or the package data."
+            )
 
-    errors.extend(_validate_network_assets(cfg, root))
-    errors.extend(_validate_abundance_preset(cfg, root))
+    errors.extend(_validate_network_assets(cfg))
+    errors.extend(_validate_abundance_preset(cfg))
     errors.extend(_validate_numerical_bounds(cfg))
 
     if errors:

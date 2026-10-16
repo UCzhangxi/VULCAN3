@@ -79,7 +79,7 @@ cfg.fastchem_solar_abundance_file = f"thermo/{abundance}"
 
 from vulcan_jax.runtime_validation import validate_runtime_config
 
-validate_runtime_config(cfg, root)
+validate_runtime_config(cfg)
 
 import vulcan_jax.chem_funs as chem_funs
 from vulcan_jax.atm_setup import Atm

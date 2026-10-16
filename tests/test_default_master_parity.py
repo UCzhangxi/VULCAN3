@@ -226,7 +226,7 @@ vulcan_cfg.use_print_prog = False
 
 from vulcan_jax.runtime_validation import validate_runtime_config
 
-validate_runtime_config(vulcan_cfg, root=jax_root)
+validate_runtime_config(vulcan_cfg)
 
 # Seed from master's initial column (module docstring); everything after
 # ini_y derives from it.
