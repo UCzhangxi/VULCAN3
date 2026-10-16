@@ -625,12 +625,15 @@ class _Statics(NamedTuple):
 # --- batched freeze ------------------------------------------------------
 # The batched body advances every lane and then keeps the pre-step carry on
 # lanes that are done. Selecting every carry leaf whole costs a full copy of
-# the carry per iteration; these two helpers keep the select to what the step
-# can actually have changed.
+# the carry per iteration, so `_freeze_leaf` skips the leaves the step passed
+# through, and the ring buffers below are never selected: `body_fn` writes
+# their one slot with the freeze already applied (its `hold`). A freeze that
+# read the pre-step ring after that write would keep two rings live, and XLA
+# would copy the whole (conv_step, nz, ni) leaf twice per iteration.
 
-# Carry leaves the body appends to one slot at a time: (ring field, index
-# source). The convergence ring is written at `(accept_count-1) % conv_step`,
-# the save_evolution buffer at the pre-step `evo_idx`.
+# Carry leaves the body appends to one slot at a time. The convergence ring is
+# written at `(accept_count-1) % conv_step`, the save_evolution buffer at the
+# pre-step `evo_idx`.
 _CONV_RING_FIELDS = ("y_time_ring", "t_time_ring")
 _EVO_RING_FIELDS = ("y_evo", "t_evo")
 # Certificate-only lane fields: the convergence ring, its two statistics, the
@@ -650,17 +653,6 @@ def _freeze_leaf(old, new, keep_old):
     """`where(keep_old, old, new)`, skipped when the step passed the leaf
     through unchanged (the same object, so the select is a copy for nothing)."""
     return old if old is new else jnp.where(keep_old, old, new)
-
-
-def _freeze_slot(old, new, keep_old, idx):
-    """`_freeze_leaf` for a ring buffer the step writes one slot of.
-
-    `new` differs from `old` only at `idx`, so restoring that slot restores
-    `old` exactly -- at one (nz, ni) write instead of a copy of the whole
-    (conv_step, nz, ni) leaf."""
-    if old is new:
-        return old
-    return new.at[idx].set(jnp.where(keep_old, old[idx], new[idx]))
 
 
 # The convergence certificate. `c` is the runner's `_Statics` or a config:
@@ -914,14 +906,19 @@ def _make_runner(
         real_term, _ = _real_terminate(s)
         return jnp.logical_not(real_term)
 
-    def body_fn(s: JaxIntegState, atm_static_, lane_axis=None, it=None):
+    def body_fn(s: JaxIntegState, atm_static_, lane_axis=None, it=None,
+                hold=None, photo_take=None):
         # `lane_axis=None` is the single-profile trace, unchanged. A string
-        # means the body runs under `jax.vmap(..., axis_name=lane_axis)`: the
-        # photo and refresh conds then take a lane-uniform predicate (a psum
-        # over the lanes, which vmap returns unmapped) so they lower to a real
-        # `case` instead of both sides running on every lane, and each lane
-        # keeps its own gate as a `where` inside the taken branch. `it` is the
-        # batched loop's iteration tick (unmapped), which keys those cadences.
+        # means the body runs under `jax.vmap(..., axis_name=lane_axis)` from
+        # `body_fn_batch`: the refresh cond then takes a lane-uniform
+        # predicate (a psum over the lanes, which vmap returns unmapped) so it
+        # lowers to a real `case` instead of both sides running on every
+        # lane, and each lane keeps its own gate as a `where` inside the taken
+        # branch. `it` is the batched loop's iteration tick (unmapped), which
+        # keys that cadence. Batched only: `hold` is the lanes the tick keeps
+        # whatever this step does (the ring writes below fold it in), and
+        # `photo_take` the lanes that take photolysis now, None on a tick
+        # without any (`body_fn_batch` owns that cond).
         #
         # Gate photo on `retry_count==0` so reject loops don't re-fire it.
         # Cadence is `accept_count % update_photo_frq == 0`; the dynamic
@@ -933,27 +930,12 @@ def _make_runner(
                     & (jnp.mod(s.accept_count, s.update_photo_frq) == jnp.int32(0))
                 )
                 s = jax.lax.cond(photo_due, photo_branch, lambda ss: ss, s)
-            else:
-                # Batched runs key the cadence to the shared tick (per-lane
-                # counts dephase and would fire every iteration); the retry
-                # gate keeps updates on accepted states and `live` keeps
-                # frozen lanes out.
-                live = jnp.logical_not(s.is_done)
-                lane_take = (
-                    (jnp.mod(it, s.update_photo_frq) == jnp.int32(0))
-                    & (s.retry_count == jnp.int32(0))
-                    & live
-                )
-                any_photo = jax.lax.psum(lane_take.astype(jnp.int32), lane_axis) > 0
-
-                def _photo_gated(ss):
-                    p = photo_branch(ss)
-                    return ss._replace(**{
-                        f: jnp.where(lane_take, getattr(p, f), getattr(ss, f))
-                        for f in _PHOTO_FIELDS
-                    })
-
-                s = jax.lax.cond(any_photo, _photo_gated, lambda ss: ss, s)
+            elif photo_take is not None:
+                p = photo_branch(s)
+                s = s._replace(**{
+                    f: jnp.where(photo_take, getattr(p, f), getattr(s, f))
+                    for f in _PHOTO_FIELDS
+                })
 
         # Splice the carry's refreshed geometry (op.py:905-907) into AtmStatic
         # for this step.
@@ -1193,10 +1175,18 @@ def _make_runner(
         )
 
         # Ring append (op.save_step). On reject this rewrites the same slot
-        # with unchanged values.
+        # with unchanged values. A batched lane the tick keeps (`hold`, or
+        # this step went non-finite: `body_fn_batch`'s freeze rule) rewrites
+        # its pre-step slot instead, so the ring is written once, in place,
+        # and the freeze passes it through.
         ring_idx = _ring_slot(accept_count_next)
-        y_time_ring_new = s.y_time_ring.at[ring_idx].set(y_next)
-        t_time_ring_new = s.t_time_ring.at[ring_idx].set(t_next)
+        y_slot, t_slot = y_next, t_next
+        if hold is not None:
+            keep = hold | jnp.logical_not(jnp.all(jnp.isfinite(y_next)))
+            y_slot = jnp.where(keep, s.y_time_ring[ring_idx], y_next)
+            t_slot = jnp.where(keep, s.t_time_ring[ring_idx], t_next)
+        y_time_ring_new = s.y_time_ring.at[ring_idx].set(y_slot)
+        t_time_ring_new = s.t_time_ring.at[ring_idx].set(t_slot)
 
         # save_evolution capture. Master appends every accepted step and
         # post-slices [::save_evo_frq], keeping accepted steps 1, K+1, 2K+1...
@@ -1213,6 +1203,9 @@ def _make_runner(
                 )
                 & (s.evo_idx < jnp.int32(statics.save_evo_n_max))
             )
+            if hold is not None:
+                # The batched freeze passes the buffer through (see the ring).
+                do_evo_append = do_evo_append & jnp.logical_not(keep)
             evo_slot = s.evo_idx
             zero_i32 = jnp.int32(0)
             y_evo_new = jax.lax.cond(
@@ -1744,16 +1737,14 @@ def _make_runner(
 
     def _freeze_state(s: JaxIntegState, s_adv: JaxIntegState, keep_old):
         """Keep the pre-step carry `s` where `keep_old`, the advanced carry
-        elsewhere -- leaf by leaf, so untouched leaves are not re-selected and
-        a ring buffer only has its one written slot restored."""
-        ring_idx = _ring_slot(s_adv.accept_count)
+        elsewhere -- leaf by leaf, so untouched leaves are not re-selected.
+        The ring buffers come back from `body_fn` already frozen (its `hold`)
+        and pass through."""
         out = {}
         for f in JaxIntegState._fields:
             old, new = getattr(s, f), getattr(s_adv, f)
-            if f in _CONV_RING_FIELDS:
-                out[f] = _freeze_slot(old, new, keep_old, ring_idx)
-            elif f in _EVO_RING_FIELDS:
-                out[f] = _freeze_slot(old, new, keep_old, s.evo_idx)
+            if f in _CONV_RING_FIELDS + _EVO_RING_FIELDS:
+                out[f] = new
             elif f == "pv":
                 out[f] = jax.tree_util.tree_map(
                     lambda o, n: _freeze_leaf(o, n, keep_old), old, new
@@ -1769,27 +1760,53 @@ def _make_runner(
         # went non-finite. Freezing on `s` keeps a finished lane's carry
         # unchanged while the slowest lane runs.
         real_term, reason = _real_terminate(s)
-        s_adv = body_fn(s, atm_static_, lane_axis=lane_axis, it=it)
-        nan_now = jnp.logical_not(jnp.all(jnp.isfinite(s_adv.y)))
-
         already_done = s.is_done
-        # Non-finite lanes freeze at the last good carry `s` (reason 5); the
-        # bad `s_adv` is discarded.
-        became_nan = nan_now & ~already_done & ~real_term
-        keep_old = already_done | real_term | became_nan
-        frozen = _freeze_state(s, s_adv, keep_old)
-        is_done_next = already_done | real_term | became_nan
-        reason_next = jnp.where(
-            already_done,
-            s.termination_reason,
-            jnp.where(
-                real_term,
-                reason,
-                jnp.where(became_nan, jnp.int32(TERM_NONFINITE),
-                          jnp.int32(TERM_RUNNING)),
-            ),
+        hold = already_done | real_term
+
+        def tick(photo_take):
+            def advance(ss):
+                s_adv = body_fn(ss, atm_static_, lane_axis=lane_axis, it=it,
+                                hold=hold, photo_take=photo_take)
+                nan_now = jnp.logical_not(jnp.all(jnp.isfinite(s_adv.y)))
+                # Non-finite lanes freeze at the last good carry `ss` (reason
+                # 5); the bad `s_adv` is discarded.
+                became_nan = nan_now & ~hold
+                keep_old = hold | became_nan
+                frozen = _freeze_state(ss, s_adv, keep_old)
+                reason_next = jnp.where(
+                    already_done,
+                    ss.termination_reason,
+                    jnp.where(
+                        real_term,
+                        reason,
+                        jnp.where(became_nan, jnp.int32(TERM_NONFINITE),
+                                  jnp.int32(TERM_RUNNING)),
+                    ),
+                )
+                return frozen._replace(is_done=keep_old, termination_reason=reason_next)
+
+            return advance
+
+        if photo_branch is None:
+            return tick(None)(s)
+        # Batched runs key the photolysis cadence to the shared tick (per-lane
+        # counts dephase and would fire every iteration); the retry gate keeps
+        # updates on accepted states and `live` keeps frozen lanes out. The
+        # cond spans the step and its freeze, not the photolysis update alone:
+        # a lane that goes non-finite falls back to its pre-step photolysis
+        # arrays, and a cond output may not overwrite an operand that is still
+        # read after it, so a cond ending before the step would copy those
+        # arrays on every tick without photolysis. Here they are read only
+        # inside the branch that changed them; the other branch passes them
+        # through untouched.
+        live = jnp.logical_not(already_done)
+        photo_take = (
+            (jnp.mod(it, s.update_photo_frq) == jnp.int32(0))
+            & (s.retry_count == jnp.int32(0))
+            & live
         )
-        return frozen._replace(is_done=is_done_next, termination_reason=reason_next)
+        any_photo = jax.lax.psum(photo_take.astype(jnp.int32), lane_axis) > 0
+        return jax.lax.cond(any_photo, tick(photo_take), tick(None), s)
 
     # One batched iteration over the lanes at the shared tick `it`.
     lane_step = jax.vmap(
@@ -1821,9 +1838,9 @@ def _make_runner(
         The static atmosphere rides the carry so a refill can swap a lane's.
         Every lane takes its own photolysis fields exactly once before its
         first chemistry step: on its photo cadence (`it % update_photo_frq ==
-        0`, always true at tick 0) from `body_fn`'s gate inside that step, as
-        in `runner_batch`; off its cadence at entry, or it would step on the
-        previous occupant's RT state.
+        0`, always true at tick 0) from `body_fn_batch`'s gate inside that
+        step, as in `runner_batch`; off its cadence at entry, or it would
+        step on the previous occupant's RT state.
         """
         sizes = {
             jnp.shape(x)[0]
@@ -1986,8 +2003,8 @@ def _make_runner(
     return runner, runner_batch, runner_queue, _make_runner_jvp
 
 
-# vmap axis name of the batched runner. `body_fn` psums over it to build the
-# lane-uniform predicates its photo / refresh conds need.
+# vmap axis name of the batched runner. `body_fn_batch` / `body_fn` psum over
+# it to build the lane-uniform predicates their photo / refresh conds need.
 _LANE_AXIS = "lane"
 
 # The JaxIntegState fields `photo_branch` writes. Under vmap the batched photo

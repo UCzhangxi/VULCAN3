@@ -5,7 +5,9 @@ The T-interpolated cross sections (`absp_T_cross`, `cross_J_T`) ride
 Pins: (1) profile B solo on its own runner matches lane 1 of a batch baked
 from A, so no per-profile photo field stays in the closure; (2) vacuity: the
 lanes' cross sections, photo firing and results differ; (3)
-`prepare_runstate` rejects a different TOA stellar flux.
+`prepare_runstate` rejects a different TOA stellar flux; (4) a lane that goes
+non-finite on a photolysis tick keeps its whole pre-step carry, photolysis
+arrays and convergence ring included.
 """
 
 from __future__ import annotations
@@ -116,6 +118,62 @@ def test_photo_lane_matches_its_solo_run():
     rsC = rsB._replace(photo=rsB.photo._replace(sflux_top=rsB.photo.sflux_top * 2.0))
     with pytest.raises(ValueError):
         integA.prepare_runstate(rsC)
+
+
+@pytest.mark.strict_isolation
+def test_lane_gone_nonfinite_on_a_photo_tick_keeps_its_whole_carry():
+    """A lane whose step goes non-finite freezes at its last good carry, leaf
+    for leaf and bitwise, also when that step's tick updated its photolysis
+    arrays. The batched freeze never re-selects the convergence ring (the step
+    writes its slot already frozen) and reads the pre-step photolysis arrays
+    only inside the photolysis tick's cond, so a regression in either shows
+    up here as a frozen lane that kept part of the failed tick.
+
+    Lane 1 is lane 0 with one thermal rate row non-finite and dt at dt_min:
+    tick 0 is on the photolysis cadence, the lane takes the update, its solve
+    is non-finite, and the rejected attempt cannot shrink dt below dt_min, so
+    it is force-accepted and y goes non-finite on that tick. Its actinic flux
+    and optical depth start at zero, so the update it took changed them.
+    """
+    import jax
+    import jax.numpy as jnp
+    from vulcan_jax import outer_loop
+
+    vulcan_cfg = _pin_cfg()
+    integ = _build_integ()
+    s0, atm0 = integ.prepare_runstate(_build_rs(vulcan_cfg, Tiso=900.0))
+    row = 1  # a thermal reaction: no photolysis or ion branch writes it
+    photo_rows = set(np.asarray(integ._photo_static.branch_re_idx).tolist())
+    photo_rows |= set(np.asarray(integ._photo_static.ion_branch_re_idx).tolist())
+    assert row not in photo_rows
+    bad = s0._replace(
+        k_arr=s0.k_arr.at[row].set(jnp.nan),
+        dt=jnp.float64(float(vulcan_cfg.dt_min)),
+        aflux=jnp.zeros_like(s0.aflux),
+        tau=jnp.zeros_like(s0.tau),
+    )
+    good, frozen = outer_loop.unstack_integ_states(
+        integ.run_batch(
+            outer_loop.stack_integ_states([s0, bad]),
+            outer_loop.stack_atm_statics([atm0, atm0]),
+        ),
+        2,
+    )
+    assert int(frozen.termination_reason) == outer_loop.TERM_NONFINITE
+    assert int(good.termination_reason) != outer_loop.TERM_NONFINITE
+    # vacuity: the update the frozen lane took would have made these nonzero
+    assert np.any(np.asarray(good.aflux) != 0.0) and np.any(np.asarray(good.tau) != 0.0)
+
+    done_flags = ("is_done", "termination_reason")
+    leaves_in = jax.tree_util.tree_flatten_with_path(bad)[0]
+    leaves_out = jax.tree_util.tree_leaves(frozen)
+    for (path, a), b in zip(leaves_in, leaves_out):
+        name = jax.tree_util.keystr(path)
+        if name.lstrip(".") in done_flags:
+            continue
+        a, b = np.asarray(a), np.asarray(b)
+        equal_nan = bool(np.issubdtype(a.dtype, np.floating))
+        assert a.dtype == b.dtype and np.array_equal(a, b, equal_nan=equal_nan), name
 
 
 @pytest.mark.strict_isolation
