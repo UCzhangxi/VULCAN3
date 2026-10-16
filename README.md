@@ -57,6 +57,15 @@ The reaction network is fixed when Python first imports the package. Set
 See [`examples/quickstart.ipynb`](examples/quickstart.ipynb) for the Python
 interface.
 
+On a GPU, `VULCAN_JAX_SOLVER=ffi` runs the block-tridiagonal solve of each
+Rosenbrock step as CUDA kernels. Build them once per host with
+`python -m vulcan_jax.solver_fast --cuda` (needs `nvcc`). For networks of up
+to 96 species the factorization keeps each block in registers (Gauss-Jordan);
+larger networks use a shared-memory LU kernel. On a GH200 with the WASP-39 b
+network (89 species, 396 columns) the factorization and the two solves of a
+step take 24.5 ms instead of 39.0 ms, and a whole step 60.7 ms instead of
+75.2 ms. `VULCAN_JAX_BT_FACTOR=lu` selects the LU kernel for any network.
+
 ## Example
 
 Run the default HD 189733 b model from Python and plot the converged

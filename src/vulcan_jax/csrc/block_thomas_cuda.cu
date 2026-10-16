@@ -1,16 +1,32 @@
 // CUDA twin of block_thomas_cpu.cc (VULCAN_JAX_SOLVER=ffi on a GPU): the same
 // block-Thomas factor and solve on [..., nz, ni, ni] blocks, with the same perm
-// convention (perm[i] = source row of permuted row i). Launch: one thread block
-// per batch element, 2 ni threads rounded up to a warp, the whole nz sweep inside
-// the kernel. Each kernel has two variants with bitwise equal results: two
-// ni x ni double blocks of shared memory plus O(ni) (about 125 KB at ni = 89),
-// or one (about 63 KB), which fits more blocks on an SM. A call takes two
-// buffers when they fit the device and need no more waves than one
-// (bt_choose); VULCAN_JAX_BT_BUFFERS=1 or 2 forces a variant. Shared memory is
-// opted in to the device maximum. The solve keeps
-// each lane's substitution rows in registers, so it takes ni <= 128 and refuses
-// more. A zero pivot gives inf/nan like lax.linalg.lu, not an error. Build:
-// python -m vulcan_jax.solver_fast --cuda.
+// convention (perm[i] = source row of permuted row i). One thread block per
+// batch element, the whole nz sweep inside the kernel. A zero pivot gives
+// inf/nan like lax.linalg.lu, not an error. Build: python -m vulcan_jax.solver_fast --cuda.
+//
+// The factor has two kernels with the same output (lu in partial-pivot row
+// order and perm). bt_gj_factor_kernel, the default wherever it fits (ni <=
+// kGjMaxNi = 96 and a block resident on the device, bt_choose_factor), holds
+// each block in registers and runs one exchange-form Gauss-Jordan sweep per
+// layer: on the rows not yet pivoted its operations are the partial-pivot LU's,
+// so layer 0 is bitwise the LU kernel's, and the same sweep leaves
+// inv(A'_j) for the next layer's Schur update. bt_factor_kernel builds that
+// inverse by ni column substitutions on the LU in shared memory instead, so
+// beyond layer 0 the two differ by roundoff. On a GH200 with WASP-39b blocks
+// (ni 89, 396 columns) the Gauss-Jordan factor takes 19.6 ms against 31.4,
+// with the same perm in every layer and the same accuracy against a binary128
+// solve. bt_factor_kernel takes ni > 96 (the DMS network, ni 97) and any
+// device the Gauss-Jordan kernel does not fit. VULCAN_JAX_BT_FACTOR=gj or lu
+// forces one.
+//
+// The LU factor and the solve launch 2 ni threads rounded up to a warp. Each
+// has two variants with bitwise equal results: two ni x ni double blocks of
+// shared memory plus O(ni) (about 125 KB at ni = 89), or one (about 63 KB),
+// which fits more blocks on an SM. A call takes two buffers when they fit the
+// device and need no more waves than one (bt_choose); VULCAN_JAX_BT_BUFFERS=1
+// or 2 forces a variant. Shared memory is opted in to the device maximum. The
+// solve keeps each lane's substitution rows in registers, so it takes ni <= 128
+// and refuses more.
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
@@ -50,6 +66,46 @@ constexpr int kMaxNb = 4;
 // allows at ni 97.
 constexpr int kSolveMinBlocks[kMaxNb + 1] = {0, 12, 6, 4, 2};
 
+// The Gauss-Jordan factor holds a kGjMaxNi x kGjMaxNi tile (the block, zero
+// padded) in registers: thread (warp w, lane l) owns rows l + kWarpSize a
+// (a < kGjRowSlots) and columns w + kGjWarps c (c < kGjColSlots). A column
+// belongs to one warp, so the pivot search is shuffles only, and every warp
+// holds every row, so each reads the pivot row from its own lane.
+constexpr int kGjWarps = 8;
+constexpr int kGjThreads = kGjWarps * kWarpSize;
+constexpr int kGjRowSlots = 3;
+constexpr int kGjColSlots = 12;
+constexpr int kGjMaxNi = kWarpSize * kGjRowSlots;  // 96
+static_assert(kGjWarps * kGjColSlots == kGjMaxNi, "the warps' columns must cover the tile");
+static_assert((kGjWarps & (kGjWarps - 1)) == 0, "column ownership is a power-of-two modulus");
+static_assert(kGjColSlots % 2 == 0, "the pivot-row copy is read as double2");
+// __launch_bounds__ minimum blocks per SM: two 256-thread blocks cap the
+// kernel at 128 registers, which hold the 36-double tile without spills on
+// sm_90 (and two blocks' shared memory fit at ni 96).
+constexpr int kGjMinBlocks = 2;
+// Pivot data of steps k - 1 (the deferred update), k and k + 1 (the
+// lookahead) is live at once, so it rotates through three buffers.
+constexpr int kGjPivotBufs = 3;
+// A pivot candidate's key is (position << kGjRowBits) | row, so the smallest
+// position wins a tie.
+constexpr int kGjRowBits = 8;
+static_assert(kGjMaxNi <= (1 << kGjRowBits), "rows must fit the pivot key");
+constexpr int kGjNoKey = std::numeric_limits<int>::max();  // loses every tie
+// Doubles of the next layer's diagonal block one thread prefetches to L2 per
+// stride: 128 B, one L2 line.
+constexpr int kGjPrefetchDoubles = 16;
+// Shared memory of the Gauss-Jordan factor in doubles from the base: the
+// pivot data at fixed offsets, then S (ni^2), which collects the LU in
+// original-row order during the sweep and then holds inv(A'_j). The ints are
+// the pivot row per buffer (padded to an even count), sperm and spos.
+constexpr int kGjOffRowbuf = kGjPivotBufs * kGjMaxNi;              // after f
+constexpr int kGjOffInfo = kGjOffRowbuf + kGjWarps * kGjColSlots;  // after rowbuf
+constexpr int kGjOffInt = kGjOffInfo + 2 * kGjPivotBufs;           // after pinfo
+constexpr int kGjProwInts = kGjPivotBufs + 1;
+constexpr int kGjIntDoubles = (kGjProwInts + 2 * kGjMaxNi + 1) / 2;
+constexpr int kGjOffS = (kGjOffInt + kGjIntDoubles + 1) / 2 * 2;  // 16-byte aligned
+static_assert(kGjOffRowbuf % 2 == 0, "rowbuf is read as double2");
+
 // Sum over q0 <= q < q1 of arow[q] * mcol[q * ms], in four independent
 // accumulators so the dependent shared-memory loads overlap. It differs from
 // the CPU reference's left-to-right sum by reassociation and by FMA
@@ -73,19 +129,24 @@ __device__ inline double bt_dot4(const double* arow, const double* mcol, int ms,
 // not written, and x (shared or global) must not overlap it. Lane l owns the
 // rows r with r % kWarpSize == l and keeps them in registers, t[q] for row
 // l + q kWarpSize (NB >= ceil(ni / kWarpSize) slots, indexed only by unrolled
-// constants so they stay in registers); the only cross-lane traffic is the
-// __shfl_sync broadcast of each finished x_i (uniform outer loops, no early
-// return). No block barrier: the other warps prefetch meanwhile. The forward
-// substitution applies the CPU lu_solve's subtractions in its order, the back
-// substitution in reverse order.
+// constants so they stay in registers), with the reciprocals of their U
+// diagonal, taken up front and off the back substitution's serial chain; the
+// only cross-lane traffic is the __shfl_sync broadcast of each finished x_i
+// (uniform outer loops, no early return). No block barrier: the other warps
+// prefetch meanwhile. The forward substitution applies the CPU lu_solve's
+// subtractions in its order, the back substitution in reverse order, and
+// x_i = t_i * (1 / u_ii) rounds twice where the CPU's t_i / u_ii rounds once.
+// A zero pivot still gives inf/nan; so does one below 2^-1024 in magnitude,
+// whose reciprocal overflows.
 template <int NB>
 __device__ void bt_lu_solve_warp0(const double* lu, int ni, const double* tmp, double* x,
                                   int lane) {
-  double t[NB];
+  double t[NB], rd[NB];
 #pragma unroll
   for (int q = 0; q < NB; ++q) {
     const int r = lane + kWarpSize * q;
     t[q] = (r < ni) ? tmp[r] : 0.0;
+    rd[q] = (r < ni) ? 1.0 / lu[r * ni + r] : 0.0;
   }
   // Row i sits in slot i / kWarpSize of lane i % kWarpSize. The loops over that
   // slot are unrolled, so every index into t is a constant; a row below i is
@@ -106,7 +167,7 @@ __device__ void bt_lu_solve_warp0(const double* lu, int ni, const double* tmp, d
     for (int i = min(ni, kWarpSize * (qi + 1)) - 1; i >= kWarpSize * qi; --i) {
       double xi = 0.0;
       if (lane == (i & kLaneMask)) {
-        xi = t[qi] / lu[i * ni + i];
+        xi = t[qi] * rd[qi];
         x[i] = xi;
       }
       xi = __shfl_sync(kFullMask, xi, i & kLaneMask);
@@ -317,6 +378,312 @@ __global__ void bt_factor_kernel(const double* __restrict__ diag,
   }
 }
 
+// The Gauss-Jordan factor's shared memory (layout at kGjOff*).
+struct BtGjSmem {
+  double* f;       // kGjPivotBufs x kGjMaxNi multipliers: f[buf * kGjMaxNi + row]
+  double* rowbuf;  // kGjWarps x kGjColSlots: each warp's copy of the pivot row
+  double* pinfo;   // (piv, 1 / piv) per buffer
+  int* prow;       // pivot row per buffer
+  int* sperm;      // position -> original row (the partial-pivot perm)
+  int* spos;       // original row -> position
+  double* S;       // ni^2
+};
+
+__device__ __forceinline__ BtGjSmem bt_gj_carve(double* base) {
+  BtGjSmem m;
+  m.f = base;
+  m.rowbuf = base + kGjOffRowbuf;
+  m.pinfo = base + kGjOffInfo;
+  m.prow = reinterpret_cast<int*>(base + kGjOffInt);
+  m.sperm = m.prow + kGjProwInts;
+  m.spos = m.sperm + kGjMaxNi;
+  m.S = base + kGjOffS;
+  return m;
+}
+
+__device__ __forceinline__ void bt_prefetch_l2(const void* p) {
+  asm volatile("prefetch.global.L2 [%0];" ::"l"(p));
+}
+
+// v[i] for a run-time i, by selects, so v stays in registers.
+template <int N>
+__device__ __forceinline__ double bt_pick(const double (&v)[N], int i) {
+  double x = v[0];
+#pragma unroll
+  for (int q = 1; q < N; ++q)
+    if (q == i) x = v[q];
+  return x;
+}
+
+// Run by the whole warp that owns column kk; v holds column kk of the lane's
+// rows, updated through step kk - 1. Chooses pivot kk with bt_lu_block's rule
+// (a row at a later position wins only on a strictly larger |a| than the row
+// at position kk, the earliest position wins a tie, a NaN never wins), then
+// publishes it in buffer nb: f (v / piv, the LU's multiplier; 0 for the pivot
+// row and the padding), the pivot row and (piv, 1 / piv). The L entries of
+// column kk and the U diagonal go to S in original-row order, the position
+// swap to sperm and spos.
+__device__ __forceinline__ void bt_gj_pivot(const double (&v)[kGjRowSlots], int kk, int nb,
+                                            int ni, int lane, const BtGjSmem& m) {
+  int pos[kGjRowSlots];
+  double best_abs = -1.0, best_val = 0.0;
+  int best_key = kGjNoKey;
+#pragma unroll
+  for (int r = 0; r < kGjRowSlots; ++r) {
+    const int row = lane + kWarpSize * r;
+    pos[r] = (row < ni) ? m.spos[row] : -1;
+    if (pos[r] > kk) {
+      const double av = fabs(v[r]);
+      const double cand = (av == av) ? av : -1.0;  // NaN never wins
+      const int key = (pos[r] << kGjRowBits) | row;
+      if (cand > best_abs || (cand == best_abs && key < best_key)) {
+        best_abs = cand;
+        best_val = v[r];
+        best_key = key;
+      }
+    }
+  }
+#pragma unroll
+  for (int off = kWarpSize / 2; off > 0; off /= 2) {
+    const double oa = __shfl_xor_sync(kFullMask, best_abs, off);
+    const double ov = __shfl_xor_sync(kFullMask, best_val, off);
+    const int ok = __shfl_xor_sync(kFullMask, best_key, off);
+    if (oa > best_abs || (oa == best_abs && ok < best_key)) {
+      best_abs = oa;
+      best_val = ov;
+      best_key = ok;
+    }
+  }
+  const int rowk = m.sperm[kk];  // the row at position kk
+  const double akk = __shfl_sync(kFullMask, bt_pick(v, rowk / kWarpSize), rowk & kLaneMask);
+  const bool swap = best_abs > fabs(akk);  // -1 and NaN never beat |akk|
+  const int ppos = swap ? (best_key >> kGjRowBits) : kk;
+  const int prow = swap ? (best_key & ((1 << kGjRowBits) - 1)) : rowk;
+  const double piv = swap ? best_val : akk;
+#pragma unroll
+  for (int r = 0; r < kGjRowSlots; ++r) {
+    const int row = lane + kWarpSize * r;
+    double f = 0.0;
+    if (row < ni && row != prow) f = v[r] / piv;
+    m.f[nb * kGjMaxNi + row] = f;
+    if (pos[r] >= kk && row != prow) m.S[row * ni + kk] = f;  // L, original row order
+  }
+  __syncwarp();  // every lane's sperm and spos reads before lane 0's swap
+  if (lane == 0) {
+    m.S[prow * ni + kk] = piv;  // U diagonal
+    m.prow[nb] = prow;
+    m.pinfo[2 * nb] = piv;
+    m.pinfo[2 * nb + 1] = 1.0 / piv;
+    if (swap) {
+      m.sperm[kk] = prow;
+      m.sperm[ppos] = rowk;
+      m.spos[prow] = kk;
+      m.spos[rowk] = ppos;
+    }
+  }
+}
+
+// Exchange update of step `step` (pivot data in buffer nb) on the warp's tile:
+// the pivot row's lane publishes the row's values through step - 1 to rowbuf
+// and its U entries (columns > step) to S; then a_ij -= f_i a_pj, the pivot
+// row is scaled by -1 / piv, and the owner of column `step` sets that column
+// to f, with 1 / piv in the pivot row. f is 0 in the pivot row, so the update
+// leaves it for the scale.
+__device__ __forceinline__ void bt_gj_update(double (&a)[kGjRowSlots][kGjColSlots], int step,
+                                             int nb, int ni, int lane, int warp,
+                                             const BtGjSmem& m) {
+  const int prow = m.prow[nb];
+  const double rcp = m.pinfo[2 * nb + 1];
+  const int pl = prow & kLaneMask, pr = prow / kWarpSize;
+  double f[kGjRowSlots];
+#pragma unroll
+  for (int r = 0; r < kGjRowSlots; ++r) f[r] = m.f[nb * kGjMaxNi + lane + kWarpSize * r];
+  double* rb = m.rowbuf + warp * kGjColSlots;
+  if (lane == pl) {
+#pragma unroll
+    for (int c = 0; c < kGjColSlots; ++c) {
+      double x = a[0][c];
+#pragma unroll
+      for (int q = 1; q < kGjRowSlots; ++q)
+        if (q == pr) x = a[q][c];
+      rb[c] = x;
+      const int col = warp + kGjWarps * c;
+      if (col > step && col < ni) m.S[prow * ni + col] = x;  // U row of `step`
+    }
+  }
+  __syncwarp();
+  const double2* rb2 = reinterpret_cast<const double2*>(rb);
+#pragma unroll
+  for (int c2 = 0; c2 < kGjColSlots / 2; ++c2) {
+    const double2 rv = rb2[c2];
+#pragma unroll
+    for (int r = 0; r < kGjRowSlots; ++r) {
+      a[r][2 * c2] = fma(-f[r], rv.x, a[r][2 * c2]);
+      a[r][2 * c2 + 1] = fma(-f[r], rv.y, a[r][2 * c2 + 1]);
+    }
+  }
+  if (lane == pl) {
+#pragma unroll
+    for (int r = 0; r < kGjRowSlots; ++r)
+      if (r == pr)
+#pragma unroll
+        for (int c = 0; c < kGjColSlots; ++c) a[r][c] = -(a[r][c] * rcp);
+  }
+  if (warp == step % kGjWarps) {
+    const int ck = step / kGjWarps;
+#pragma unroll
+    for (int c = 0; c < kGjColSlots; ++c)
+      if (c == ck)
+#pragma unroll
+        for (int r = 0; r < kGjRowSlots; ++r)
+          a[r][c] = (lane + kWarpSize * r == prow) ? rcp : f[r];
+  }
+  __syncwarp();  // rowbuf is reused by the next update of this phase
+}
+
+// The Gauss-Jordan factor of one batch element, the drop-in for
+// bt_factor_kernel (same arguments, same lu and perm). Per layer, pivot k of
+// the sweep with pivot (p, k): f_i = a_ik / a_pk, a_ij -= f_i a_pj (i != p,
+// j != k), a_ik = f_i, a_pj = -a_pj (1 / a_pk), a_pk = 1 / a_pk. On the rows not
+// yet pivoted that is the partial-pivot LU's trailing update (same pivots and
+// tie rule as bt_lu_block, the same division for f and fma for the update), so
+// L and U are read off the published pivot rows and multipliers; after all ni
+// pivots the tile holds inv(A'_j) with inv[pos(r)][sperm(c)] = a_rc.
+// Lookahead: the owner of column k + 1 updates that column first, picks pivot
+// k + 1 and publishes it while the other warps run update k, and defers its
+// own update k to the next phase, off the pivot chain, so each pivot costs one
+// block barrier. A layer ends with the LU store, inv(A'_j) into S and the
+// Schur update A'_{j+1} = D_{j+1} - (c b^T) .* inv(A'_j) into the registers,
+// barriers between them; D_{j+1} is prefetched to L2 while the layer is swept.
+__global__ void __launch_bounds__(kGjThreads, kGjMinBlocks)
+bt_gj_factor_kernel(const double* __restrict__ diag, const double* __restrict__ sup,
+                    const double* __restrict__ sub, double* __restrict__ lu,
+                    int32_t* __restrict__ perm, int nz, int ni) {
+  extern __shared__ double bt_smem[];
+  const BtGjSmem m = bt_gj_carve(bt_smem);
+  const int blk = ni * ni;
+  const int tid = threadIdx.x, lane = tid & kLaneMask, warp = tid / kWarpSize;
+  const int64_t b = blockIdx.x;
+  const double* D = diag + b * nz * static_cast<int64_t>(blk);
+  const double* SU = sup + b * static_cast<int64_t>(nz - 1) * ni;
+  const double* SB = sub + b * static_cast<int64_t>(nz - 1) * ni;
+
+  double a[kGjRowSlots][kGjColSlots];
+#pragma unroll
+  for (int r = 0; r < kGjRowSlots; ++r)
+#pragma unroll
+    for (int c = 0; c < kGjColSlots; ++c) {
+      const int row = lane + kWarpSize * r, col = warp + kGjWarps * c;
+      a[r][c] = (row < ni && col < ni) ? D[row * ni + col] : 0.0;
+    }
+
+  for (int j = 0; j < nz; ++j) {
+    if (j + 1 < nz)
+      for (int off = tid * kGjPrefetchDoubles; off < blk; off += kGjThreads * kGjPrefetchDoubles)
+        bt_prefetch_l2(D + static_cast<int64_t>(j + 1) * blk + off);
+    for (int i = tid; i < kGjMaxNi; i += kGjThreads) {
+      m.sperm[i] = i;
+      m.spos[i] = i;
+    }
+    __syncthreads();
+    if (warp == 0) {
+      double v[kGjRowSlots];
+#pragma unroll
+      for (int r = 0; r < kGjRowSlots; ++r) v[r] = a[r][0];
+      bt_gj_pivot(v, 0, 0, ni, lane, m);
+    }
+    __syncthreads();
+
+    for (int k = 0, buf = 0; k < ni; ++k, buf = (buf == kGjPivotBufs - 1) ? 0 : buf + 1) {
+      const int kn = k + 1, nbuf = (buf == kGjPivotBufs - 1) ? 0 : buf + 1;
+      const int pbuf = (buf == 0) ? kGjPivotBufs - 1 : buf - 1;
+      // the owner of column k ran pivot k's lookahead last phase and deferred
+      // its update k - 1 to now
+      if (k > 0 && warp == k % kGjWarps) bt_gj_update(a, k - 1, pbuf, ni, lane, warp, m);
+      if (kn < ni && warp == kn % kGjWarps) {  // lookahead: column kn after update k
+        const int prow = m.prow[buf];
+        const double rcp = m.pinfo[2 * buf + 1];
+        const int pl = prow & kLaneMask, pr = prow / kWarpSize;
+        const int cn = kn / kGjWarps;
+        double x[kGjRowSlots];
+#pragma unroll
+        for (int r = 0; r < kGjRowSlots; ++r) {
+          x[r] = a[r][0];
+#pragma unroll
+          for (int c = 1; c < kGjColSlots; ++c)
+            if (c == cn) x[r] = a[r][c];
+        }
+        const double rv = __shfl_sync(kFullMask, bt_pick(x, pr), pl);  // pivot row, column kn
+        double v[kGjRowSlots];
+#pragma unroll
+        for (int r = 0; r < kGjRowSlots; ++r) {
+          const double f = m.f[buf * kGjMaxNi + lane + kWarpSize * r];
+          // the arithmetic bt_gj_update applies to this element
+          v[r] = (lane + kWarpSize * r == prow) ? -(fma(-f, rv, x[r]) * rcp) : fma(-f, rv, x[r]);
+        }
+        bt_gj_pivot(v, kn, nbuf, ni, lane, m);
+      } else {
+        bt_gj_update(a, k, buf, ni, lane, warp, m);
+      }
+      __syncthreads();
+    }
+
+    // LU in partial-pivot row order (row i of lu = original row sperm[i]) and perm
+    double* Lj = lu + (b * nz + j) * static_cast<int64_t>(blk);
+    for (int e = tid; e < blk; e += kGjThreads) {
+      const int i = e / ni, c = e - i * ni;
+      Lj[e] = m.S[m.sperm[i] * ni + c];
+    }
+    int32_t* Pj = perm + (b * nz + j) * static_cast<int64_t>(ni);
+    for (int i = tid; i < ni; i += kGjThreads) Pj[i] = m.sperm[i];
+    __syncthreads();
+    if (j + 1 == nz) break;
+    {  // inv(A'_j) into S, row-major: inv[pos(row)][sperm(col)] = a[row][col]
+      int rpos[kGjRowSlots];
+#pragma unroll
+      for (int r = 0; r < kGjRowSlots; ++r) {
+        const int row = lane + kWarpSize * r;
+        rpos[r] = (row < ni) ? m.spos[row] : -1;
+      }
+#pragma unroll
+      for (int c = 0; c < kGjColSlots; ++c) {
+        const int col = warp + kGjWarps * c;
+        if (col < ni) {
+          const int cs = m.sperm[col];
+#pragma unroll
+          for (int r = 0; r < kGjRowSlots; ++r)
+            if (rpos[r] >= 0) m.S[rpos[r] * ni + cs] = a[r][c];
+        }
+      }
+    }
+    __syncthreads();
+    {  // A'_{j+1} = D_{j+1} - (c b^T) .* inv(A'_j), c = sub[j], b = sup[j]
+      const double* Dn = D + static_cast<int64_t>(j + 1) * blk;
+      const double* cc = SB + static_cast<int64_t>(j) * ni;
+      const double* bb = SU + static_cast<int64_t>(j) * ni;
+      double cr[kGjRowSlots];
+#pragma unroll
+      for (int r = 0; r < kGjRowSlots; ++r) {
+        const int row = lane + kWarpSize * r;
+        cr[r] = (row < ni) ? cc[row] : 0.0;
+      }
+#pragma unroll
+      for (int c = 0; c < kGjColSlots; ++c) {
+        const int col = warp + kGjWarps * c;
+        const double bs = (col < ni) ? bb[col] : 0.0;
+#pragma unroll
+        for (int r = 0; r < kGjRowSlots; ++r) {
+          const int row = lane + kWarpSize * r;
+          a[r][c] = (row < ni && col < ni)
+                        ? Dn[row * ni + col] - (cr[r] * bs) * m.S[row * ni + col]
+                        : 0.0;
+        }
+      }
+    }
+    __syncthreads();
+  }
+}
+
 // Copies one layer's LU block into shared memory with threads t0, t0 + n0, ...
 // The caller barriers. While warp 0 substitutes, the other warps call this as
 // the prefetch, so the global latency hides behind the solve.
@@ -414,8 +781,9 @@ bt_solve_kernel(const double* __restrict__ lu,
   }
 }
 
-// Threads per block: 2 ni rounded up to a warp, so the factor's inverse gives
-// every column a lane pair in one round (192 at ni = 89).
+// Threads per block of the LU factor and the solve: 2 ni rounded up to a
+// warp, so the factor's inverse gives every column a lane pair in one round
+// (192 at ni = 89).
 int bt_threads(int ni) {
   const int t = (2 * ni + kWarpSize - 1) / kWarpSize * kWarpSize;
   return t > kMaxThreads ? kMaxThreads : (t < kWarpSize ? kWarpSize : t);
@@ -425,6 +793,10 @@ int bt_threads(int ni) {
 size_t bt_factor_shmem(int ni, bool one_buf) {
   return ((one_buf ? 1 : 2) * static_cast<size_t>(ni) * ni + 2 * kMaxWarps) * sizeof(double) +
          (kMaxWarps + static_cast<size_t>(ni)) * sizeof(int32_t);
+}
+
+size_t bt_gj_factor_shmem(int ni) {
+  return (kGjOffS + static_cast<size_t>(ni) * ni) * sizeof(double);
 }
 
 size_t bt_solve_shmem(int ni, bool one_buf) {
@@ -469,11 +841,15 @@ BtOptIn bt_opt_in(int device) {
   cudaError_t r = cudaDeviceGetAttribute(&optin, cudaDevAttrMaxSharedMemoryPerBlockOptin, device);
   if (r == cudaSuccess) r = cudaDeviceGetAttribute(&sms, cudaDevAttrMultiProcessorCount, device);
   int limit = optin;
-  const void* kernels[2 + 2 * kMaxNb] = {reinterpret_cast<const void*>(bt_factor_kernel<false>),
-                                         reinterpret_cast<const void*>(bt_factor_kernel<true>)};
+  constexpr int kFactorKernels = 3;
+  const void* kernels[kFactorKernels + 2 * kMaxNb] = {
+      reinterpret_cast<const void*>(bt_factor_kernel<false>),
+      reinterpret_cast<const void*>(bt_factor_kernel<true>),
+      reinterpret_cast<const void*>(bt_gj_factor_kernel)};
   for (int b = 0; b < 2; ++b)
     for (int nb = 1; nb <= kMaxNb; ++nb)
-      kernels[2 + b * kMaxNb + nb - 1] = reinterpret_cast<const void*>(bt_solve_kernel_for(b, nb));
+      kernels[kFactorKernels + b * kMaxNb + nb - 1] =
+          reinterpret_cast<const void*>(bt_solve_kernel_for(b, nb));
   for (const void* k : kernels) {
     cudaFuncAttributes a = {};
     if (r == cudaSuccess) r = cudaFuncGetAttributes(&a, k);
@@ -484,6 +860,16 @@ BtOptIn bt_opt_in(int device) {
   }
   done[device] = BtOptIn{r, limit, sms};
   return done[device];
+}
+
+// The device's opt-in (bt_opt_in) in *opt, or the error that stopped it.
+ffi::Error bt_opt_in_checked(int device, BtOptIn* opt) {
+  *opt = bt_opt_in(device);
+  if (opt->status != cudaSuccess) {
+    return ffi::Error::Internal(std::string("block-Thomas shared-memory opt-in failed: ") +
+                                cudaGetErrorString(opt->status));
+  }
+  return ffi::Error::Success();
 }
 
 // An error unless `bytes` of dynamic shared memory fit the opted-in limit.
@@ -507,6 +893,17 @@ const char* bt_forced_buffers() {
   return v;
 }
 
+// VULCAN_JAX_BT_FACTOR, read once per process: unset or empty picks the
+// factor kernel per call (bt_choose_factor); "gj" or "lu" forces the
+// Gauss-Jordan or the LU one, for the A/B and the tests.
+const std::string& bt_forced_factor() {
+  static const std::string v = [] {
+    const char* e = std::getenv("VULCAN_JAX_BT_FACTOR");
+    return std::string((e == nullptr) ? "" : e);
+  }();
+  return v;
+}
+
 // Sets *one_buf to the variant a call of `batch` blocks launches. Two buffers
 // when they fit the device and need no more waves than one, a wave being the
 // SM count times the blocks of that variant resident on an SM (the occupancy
@@ -516,11 +913,9 @@ const char* bt_forced_buffers() {
 // the error that forbids the launch, if any.
 ffi::Error bt_choose(int device, int64_t batch, const void* two, size_t shmem2, const void* one,
                      size_t shmem1, int threads, bool* one_buf) {
-  const BtOptIn opt = bt_opt_in(device);
-  if (opt.status != cudaSuccess) {
-    return ffi::Error::Internal(std::string("block-Thomas shared-memory opt-in failed: ") +
-                                cudaGetErrorString(opt.status));
-  }
+  BtOptIn opt;
+  ffi::Error err = bt_opt_in_checked(device, &opt);
+  if (err.failure()) return err;
   const char* forced = bt_forced_buffers();
   if (std::strcmp(forced, "1") == 0 || std::strcmp(forced, "2") == 0) {
     *one_buf = forced[0] == '1';
@@ -544,6 +939,41 @@ ffi::Error bt_choose(int device, int64_t batch, const void* two, size_t shmem2, 
   return bt_shared_fits(*one_buf ? shmem1 : shmem2, opt);
 }
 
+// Sets *gj to whether a factor call of block order `ni` runs the Gauss-Jordan
+// kernel: unless VULCAN_JAX_BT_FACTOR=lu, whenever ni <= kGjMaxNi and the
+// occupancy calculator leaves at least one block of it resident on an SM (its
+// shared memory within the opt-in limit). No wave count: on a GH200 it beats
+// the LU kernel at every batch measured (132 to 1188 columns at ni 89), also
+// where it needs more waves. With VULCAN_JAX_BT_FACTOR=gj a call it cannot
+// take is an error. Returns the error that forbids the call, if any.
+ffi::Error bt_choose_factor(int device, int ni, bool* gj) {
+  const std::string& forced = bt_forced_factor();
+  *gj = false;
+  if (forced == "lu") return ffi::Error::Success();
+  if (!forced.empty() && forced != "gj") {
+    return ffi::Error::InvalidArgument("VULCAN_JAX_BT_FACTOR=" + forced +
+                                       ": expected gj, lu or unset");
+  }
+  BtOptIn opt;
+  ffi::Error err = bt_opt_in_checked(device, &opt);
+  if (err.failure()) return err;
+  const size_t shmem = bt_gj_factor_shmem(ni);
+  if (ni <= kGjMaxNi && shmem <= static_cast<size_t>(opt.limit)) {
+    int per_sm = 0;
+    const cudaError_t r = cudaOccupancyMaxActiveBlocksPerMultiprocessor(
+        &per_sm, bt_gj_factor_kernel, kGjThreads, shmem);
+    if (r != cudaSuccess) return ffi::Error::Internal(cudaGetErrorString(r));
+    *gj = per_sm > 0;
+  }
+  if (forced == "gj" && !*gj) {
+    return ffi::Error::InvalidArgument(
+        "VULCAN_JAX_BT_FACTOR=gj: the Gauss-Jordan factor takes ni <= " +
+        std::to_string(kGjMaxNi) + " and needs " + std::to_string(shmem) +
+        " B of shared memory and a resident block on this device; ni = " + std::to_string(ni));
+  }
+  return ffi::Error::Success();
+}
+
 // The launch's own error, if any; execution errors surface on the stream.
 ffi::Error bt_launch_status() {
   const cudaError_t e = cudaGetLastError();
@@ -559,6 +989,16 @@ ffi::Error FactorImplCuda(cudaStream_t stream, int32_t device, ffi::Buffer<ffi::
   if (err.failure()) return err;
   if (shape.batch == 0 || shape.ni == 0) return ffi::Error::Success();
   if (shape.batch > kMaxGridX) return ffi::Error::InvalidArgument("batch exceeds the CUDA grid limit");
+  bool gj = false;
+  err = bt_choose_factor(device, shape.ni, &gj);
+  if (err.failure()) return err;
+  if (gj) {
+    bt_gj_factor_kernel<<<static_cast<unsigned int>(shape.batch), kGjThreads,
+                          bt_gj_factor_shmem(shape.ni), stream>>>(
+        diag.typed_data(), sup.typed_data(), sub.typed_data(), lu->typed_data(),
+        perm->typed_data(), shape.nz, shape.ni);
+    return bt_launch_status();
+  }
   const int threads = bt_threads(shape.ni);
   bool one_buf = false;
   err = bt_choose(device, shape.batch, reinterpret_cast<const void*>(bt_factor_kernel<false>),

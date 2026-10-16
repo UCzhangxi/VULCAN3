@@ -16,12 +16,16 @@ Same call shape as `solver.py`: `factor(diag, sup_d, sub_d)` once, then
    these calls, which have no AD rules, differentiable. Reverse mode runs the
    JAX transpose sweep on the kernel's factors (`transpose_solve` below).
 
-On a CUDA device the `ffi` backend runs `csrc/block_thomas_cuda.cu` (its
-header gives the launch layout and the one/two-buffer choice;
-`VULCAN_JAX_BT_BUFFERS=1|2` forces a variant): one factor launch and two solve
-launches per Ros2 step. It is built only by `python -m vulcan_jax.solver_fast
---cuda` on a host with nvcc; without the library nothing changes here and a
-device call under `ffi` fails loudly at dispatch.
+On a CUDA device the `ffi` backend runs `csrc/block_thomas_cuda.cu`: one
+factor launch and two solve launches per Ros2 step, with the CPU kernel's
+factor format and its results to roundoff (not bitwise). Its header gives the
+launch layouts and the two per-call choices: the factor kernel (Gauss-Jordan
+up to ni = 96, LU above) and the LU factor's and the solve's one- or
+two-buffer variant. `VULCAN_JAX_BT_FACTOR=gj|lu` and
+`VULCAN_JAX_BT_BUFFERS=1|2` force them; both are read once per process. It
+is built only by `python -m vulcan_jax.solver_fast --cuda` on a host with
+nvcc; without the library nothing changes here and a device call under `ffi`
+fails loudly at dispatch.
 
 `jax_step` imports this module by default; `VULCAN_JAX_SOLVER=reference`
 restores the plain `solver.py` pair for A/B, and `ffi` selects the C++ kernel.
