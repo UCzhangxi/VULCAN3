@@ -1882,8 +1882,9 @@ def _make_runner(
         `n_lanes`) adds tail compaction; `()` is the loop above, unchanged.
         Once every job has been handed to a lane and the live lanes (holding
         a job, not done) fit the next rung, the loop exits and the live lanes
-        are gathered into a carry of that width, which runs the same lane
-        step from the same tick with no refill, and so on down the ladder.
+        are gathered into a carry of that width, which runs the same loop
+        body from the same tick (nothing is pending, so it never refills),
+        and so on down the ladder.
         The done lanes still holding a job are written out at the gather with
         the frozen state the final flush would write. `stats=True` also
         returns, per rung, the tick and the live-lane count at its gather.
@@ -1979,11 +1980,16 @@ def _make_runner(
 
         def refill(c):
             it, lanes, atm_l, lane_job, nxt, out = c
+            # The carry's width: n_lanes, or a compaction rung's (the tail
+            # loops run `body` too, see there; with nothing pending this
+            # branch never runs in them).
+            w = int(lane_job.shape[0])
+            lane_ix = j0 if w == n_lanes else jnp.arange(w, dtype=jnp.int32)
             free = lanes.is_done & (lane_job >= 0)
             # Free lanes first, then lane order: a fixed-size selection of
             # `chunk` slots whose leading entries are the refillable ones.
-            order = jnp.logical_not(free).astype(jnp.int32) * jnp.int32(n_lanes) + j0
-            sel = jnp.argsort(order)[:chunk]
+            order = jnp.logical_not(free).astype(jnp.int32) * jnp.int32(w) + lane_ix
+            sel = jnp.argsort(order)[:min(chunk, w)]
             sel_free = free[sel]
             out = write_out(out, lanes, sel, lane_job[sel], sel_free)
             jid = nxt + jnp.cumsum(sel_free, dtype=jnp.int32) - jnp.int32(1)
@@ -2071,17 +2077,6 @@ def _make_runner(
 
             return f
 
-        def tail_body(c):
-            # `body` with nothing pending: its refill cond is never taken, so
-            # the tail loops leave it (and the init_fn it traces) out.
-            it, lanes, atm_l, lane_job, nxt, out = c
-            lanes = lane_step(it, lanes, with_atm(atm_l))
-            lanes = lanes._replace(**{
-                f: jax.lax.stop_gradient(getattr(lanes, f))
-                for f in _QUEUE_STOP_FIELDS
-            })
-            return (it + jnp.int32(1), lanes, atm_l, lane_job, nxt, out)
-
         def gather(c, width_from, width_to):
             """Write out the done lanes holding a job, then keep the live
             lanes (lane order) in a carry of `width_to` lanes; the slots
@@ -2110,7 +2105,13 @@ def _make_runner(
             c = gather(c, width, rung)
             width = rung
             nxt_rung = compact[k + 1] if k + 1 < len(compact) else None
-            c = jax.lax.while_loop(until(nxt_rung), tail_body, c)
+            # The tail loops run `body` itself. With nothing pending its
+            # refill cond is never taken, but it is what lets the lane
+            # step's carry alias the loop's: a body that hands the lane
+            # step's photolysis-cond outputs straight back to the carry makes
+            # XLA copy every lane leaf each tick, the (conv_step, nz, ni)
+            # convergence ring twice (job 93269: 20% of a 264-lane tick).
+            c = jax.lax.while_loop(until(nxt_rung), body, c)
         it, lanes, _atm_l, lane_job, _nxt, out = c
         out = write_out(out, lanes, jnp.arange(width, dtype=jnp.int32), lane_job,
                         lane_job >= 0)
