@@ -17,7 +17,12 @@
 // with the same perm in every layer and the same accuracy against a binary128
 // solve. bt_factor_kernel takes ni > 96 (the DMS network, ni 97) and any
 // device the Gauss-Jordan kernel does not fit. VULCAN3_BT_FACTOR=gj or lu
-// forces one.
+// forces one. The Gauss-Jordan pivot step is on the kernel's critical path, so
+// it reduces the warp's candidates with three REDUX operations on sm_80+
+// (bt_warp_argmax) and takes the multipliers v / piv as products with the IEEE
+// 1 / piv and two FMA corrections (bt_div_by_rcp), dividing only outside that
+// sequence's range: the same winner and the same IEEE quotients, so the
+// factors are bitwise those of the shuffle rounds and divisions.
 //
 // The LU factor and the solve launch 2 ni threads rounded up to a warp. Each
 // has two variants with bitwise equal results: two ni x ni double blocks of
@@ -26,7 +31,8 @@
 // device and need no more waves than one (bt_choose); VULCAN3_BT_BUFFERS=1
 // or 2 forces a variant. Shared memory is opted in to the device maximum. The
 // solve keeps each lane's substitution rows in registers, so it takes ni <= 128
-// and refuses more.
+// and refuses more; it stages each layer's LU in shared memory with cp.async
+// on sm_80+ (bt_load_block), every thread's copies in flight at once.
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
@@ -415,12 +421,72 @@ __device__ __forceinline__ double bt_pick(const double (&v)[N], int i) {
   return x;
 }
 
+// The warp's best pivot candidate (largest best_abs, then smallest best_key),
+// left in every lane. best_abs is -1 (no candidate, or a NaN) or |a| >= 0, so
+// its bits plus one order the candidates as the doubles do: on sm_80+ three
+// REDUX operations take the largest image and the smallest key among its
+// holders, the winner of the five shuffle rounds below in about 150 cycles
+// instead of about 390 on a GH200, on the pivot chain.
+__device__ __forceinline__ void bt_warp_argmax(double& best_abs, double& best_val, int& best_key) {
+#if __CUDA_ARCH__ >= 800
+  const unsigned long long img =
+      (best_abs < 0.0) ? 0ull : static_cast<unsigned long long>(__double_as_longlong(best_abs)) + 1ull;
+  const unsigned hi = static_cast<unsigned>(img >> 32), lo = static_cast<unsigned>(img);
+  const unsigned max_hi = __reduce_max_sync(kFullMask, hi);
+  const unsigned max_lo = __reduce_max_sync(kFullMask, hi == max_hi ? lo : 0u);
+  const int key = __reduce_min_sync(kFullMask, (hi == max_hi && lo == max_lo) ? best_key : kGjNoKey);
+  const int src = key & kLaneMask;  // a key's row is lane + kWarpSize r: its lane holds it as its best
+  best_abs = __shfl_sync(kFullMask, best_abs, src);
+  best_val = __shfl_sync(kFullMask, best_val, src);
+  best_key = key;
+#else
+#pragma unroll
+  for (int off = kWarpSize / 2; off > 0; off /= 2) {
+    const double oa = __shfl_xor_sync(kFullMask, best_abs, off);
+    const double ov = __shfl_xor_sync(kFullMask, best_val, off);
+    const int ok = __shfl_xor_sync(kFullMask, best_key, off);
+    if (oa > best_abs || (oa == best_abs && ok < best_key)) {
+      best_abs = oa;
+      best_val = ov;
+      best_key = ok;
+    }
+  }
+#endif
+}
+
+// Range of bt_div_by_rcp: |piv| within [2^-1000, 2^1000] (a normal reciprocal),
+// |a| at least and |a y| within 2^+-960 (normal products, exact residuals).
+constexpr double kGjRcpPivMin = 0x1p-1000, kGjRcpPivMax = 0x1p1000;
+constexpr double kGjRcpQuotMin = 0x1p-960, kGjRcpQuotMax = 0x1p960;
+
+// a / b from y = 1 / b (IEEE): q0 = a y and two FMA corrections with the
+// exact residual a - b q. y correctly rounded leaves q1 within an ulp of a / b
+// and the second correction rounds it correctly (Markstein), so the result is
+// the IEEE quotient as long as nothing over- or underflows. `ok` says so: a = 0
+// (q0 is then the signed zero a / b gives), or |a| and |q0| within the
+// kGjRcpQuot range; the caller checks |b|. Five dependent FP64 operations,
+// where a division is a longer sequence with a slow-path branch.
+__device__ __forceinline__ double bt_div_by_rcp(double a, double b, double y, bool& ok) {
+  const double q0 = a * y;
+  const double r0 = fma(-q0, b, a);
+  const double q1 = fma(r0, y, q0);
+  const double r1 = fma(-q1, b, a);
+  const double q2 = fma(r1, y, q1);
+  const double aa = fabs(a), aq = fabs(q0);
+  ok = (a == 0.0) || (aa >= kGjRcpQuotMin && aq >= kGjRcpQuotMin && aq <= kGjRcpQuotMax);
+  return (a == 0.0) ? q0 : q2;
+}
+
 // Run by the whole warp that owns column kk; v holds column kk of the lane's
 // rows, updated through step kk - 1. Chooses pivot kk with bt_lu_block's rule
 // (a row at a later position wins only on a strictly larger |a| than the row
 // at position kk, the earliest position wins a tie, a NaN never wins), then
 // publishes it in buffer nb: f (v / piv, the LU's multiplier; 0 for the pivot
-// row and the padding), the pivot row and (piv, 1 / piv). The L entries of
+// row and the padding), the pivot row and (piv, 1 / piv). The multipliers are
+// bt_div_by_rcp's corrected products with the IEEE 1 / piv, bitwise v / piv;
+// when any lane's operands leave its range (|piv| beyond about 2^+-1000, a
+// zero, infinite or NaN pivot, |v| or |v / piv| beyond about 2^+-960) the warp
+// divides instead. The L entries of
 // column kk and the U diagonal go to S in original-row order, the position
 // swap to sperm and spos.
 __device__ __forceinline__ void bt_gj_pivot(const double (&v)[kGjRowSlots], int kk, int nb,
@@ -443,37 +509,42 @@ __device__ __forceinline__ void bt_gj_pivot(const double (&v)[kGjRowSlots], int 
       }
     }
   }
-#pragma unroll
-  for (int off = kWarpSize / 2; off > 0; off /= 2) {
-    const double oa = __shfl_xor_sync(kFullMask, best_abs, off);
-    const double ov = __shfl_xor_sync(kFullMask, best_val, off);
-    const int ok = __shfl_xor_sync(kFullMask, best_key, off);
-    if (oa > best_abs || (oa == best_abs && ok < best_key)) {
-      best_abs = oa;
-      best_val = ov;
-      best_key = ok;
-    }
-  }
+  bt_warp_argmax(best_abs, best_val, best_key);
   const int rowk = m.sperm[kk];  // the row at position kk
   const double akk = __shfl_sync(kFullMask, bt_pick(v, rowk / kWarpSize), rowk & kLaneMask);
   const bool swap = best_abs > fabs(akk);  // -1 and NaN never beat |akk|
   const int ppos = swap ? (best_key >> kGjRowBits) : kk;
   const int prow = swap ? (best_key & ((1 << kGjRowBits) - 1)) : rowk;
   const double piv = swap ? best_val : akk;
+  const double rpiv = 1.0 / piv;
+  bool fast = fabs(piv) >= kGjRcpPivMin && fabs(piv) <= kGjRcpPivMax;  // false for 0, inf, NaN
+  double f[kGjRowSlots];
 #pragma unroll
   for (int r = 0; r < kGjRowSlots; ++r) {
     const int row = lane + kWarpSize * r;
-    double f = 0.0;
-    if (row < ni && row != prow) f = v[r] / piv;
-    m.f[nb * kGjMaxNi + row] = f;
-    if (pos[r] >= kk && row != prow) m.S[row * ni + kk] = f;  // L, original row order
+    bool ok = true;
+    f[r] = (row < ni && row != prow) ? bt_div_by_rcp(v[r], piv, rpiv, ok) : 0.0;
+    fast = fast && ok;
+  }
+  if (!__all_sync(kFullMask, fast)) {  // outside the corrected range: IEEE divisions
+#pragma unroll
+    for (int r = 0; r < kGjRowSlots; ++r) {
+      const int row = lane + kWarpSize * r;
+      f[r] = (row < ni && row != prow) ? v[r] / piv : 0.0;
+    }
+  }
+#pragma unroll
+  for (int r = 0; r < kGjRowSlots; ++r) {
+    const int row = lane + kWarpSize * r;
+    m.f[nb * kGjMaxNi + row] = f[r];
+    if (pos[r] >= kk && row != prow) m.S[row * ni + kk] = f[r];  // L, original row order
   }
   __syncwarp();  // every lane's sperm and spos reads before lane 0's swap
   if (lane == 0) {
     m.S[prow * ni + kk] = piv;  // U diagonal
     m.prow[nb] = prow;
     m.pinfo[2 * nb] = piv;
-    m.pinfo[2 * nb + 1] = 1.0 / piv;
+    m.pinfo[2 * nb + 1] = rpiv;
     if (swap) {
       m.sperm[kk] = prow;
       m.sperm[ppos] = rowk;
@@ -686,9 +757,23 @@ bt_gj_factor_kernel(const double* __restrict__ diag, const double* __restrict__ 
 
 // Copies one layer's LU block into shared memory with threads t0, t0 + n0, ...
 // The caller barriers. While warp 0 substitutes, the other warps call this as
-// the prefetch, so the global latency hides behind the solve.
+// the prefetch, so the global latency hides behind the solve. On sm_80+ each
+// thread issues all its 8-byte copies with cp.async and waits once, so its
+// whole share is in flight together; a load-then-store loop keeps one load per
+// thread in flight, and on a GH200 that latency bound the solve (78% of its
+// stall samples, at the shared-memory store). The same values either way.
 __device__ inline void bt_load_block(double* A, const double* L, int blk, int t0, int n0) {
+#if __CUDA_ARCH__ >= 800
+  for (int i = t0; i < blk; i += n0) {
+    const unsigned dst = static_cast<unsigned>(__cvta_generic_to_shared(A + i));
+    asm volatile("cp.async.ca.shared.global [%0], [%1], 8;" ::"r"(dst),
+                 "l"(__cvta_generic_to_global(L + i))
+                 : "memory");
+  }
+  asm volatile("cp.async.commit_group;\n\tcp.async.wait_group 0;" ::: "memory");
+#else
   for (int i = t0; i < blk; i += n0) A[i] = L[i];
+#endif
 }
 
 __device__ inline void bt_swap(double*& a, double*& b) {

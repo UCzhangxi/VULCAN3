@@ -9,8 +9,10 @@ and its linearised residual is never worse, reverse mode (steady_state_grad's
 the VULCAN shape, then the real HD189 blocks at four dt (the W39b blocks in a
 SNCHO child, slow-gated like the other W39b children). On a CUDA host both GPU
 factor kernels (Gauss-Jordan and LU) and the solve are also checked against the
-CPU kernel on pivoting, tied and singular blocks, against each other on the
-real blocks, and, opt-in, under compute-sanitizer.
+CPU kernel on pivoting, tied, singular and extreme-range blocks, against each
+other on the real blocks (the Gauss-Jordan pivot step's first layer byte for
+byte the LU kernel's, the division fallback included), and, opt-in, under
+compute-sanitizer.
 """
 
 from __future__ import annotations
@@ -60,7 +62,11 @@ FACTOR_VARIANTS = ("gj", "lu")
 GJ_MAX_NI = 96
 # (nz, ni, kind) of `_kernel_case` compared with the CPU kernel.
 KERNEL_CASES = [(1, 5, "random"), (3, 16, "random"), (4, 33, "random"), (6, 64, "random"),
-                (3, 16, "tie"), (3, 16, "singular")]
+                (3, 16, "tie"), (3, 16, "singular"), (3, 16, "huge"), (3, 16, "tiny")]
+# The Gauss-Jordan pivot step takes its multipliers v / piv as the IEEE 1 / piv
+# times v with two FMA corrections while |piv| <= 2^1000 and |v|, |v / piv| >=
+# 2^-960 (block_thomas_cuda.cu kGjRcp*), and divides outside that range.
+GJ_RCP_PIV_MAX, GJ_RCP_QUOT_MIN = 2.0**1000, 2.0**-960
 # ... and on both sides of GJ_MAX_NI, for the factor choice: blocks of cond up to
 # ~2e5, where two correct kernels differ by more than KERNEL_RTOL, so these are
 # judged by residual.
@@ -231,7 +237,10 @@ def _cuda_device():
 def _kernel_case(nz, ni, kind):
     """Blocks without a diagonal boost, so rows swap. `tie`: rows 2 and 5 tie
     for the first pivot (bit-equal |a|). `singular`: a duplicated row gives a
-    zero pivot."""
+    zero pivot. `huge`: row 7, scaled by 2^1003, is the first pivot, beyond
+    GJ_RCP_PIV_MAX. `tiny`: row 3, scaled by 2^-975, gives multiplier
+    numerators below GJ_RCP_QUOT_MIN until it is pivoted (and 1e294 entries in
+    the next layer). Both stay finite through the sweep."""
     d, s, c, r = (np.array(a) for a in _system(nz, ni, ni, boost=0.0, scale=1.0))
     if kind == "tie":
         d[0, 2, 0] = 10.0 * np.abs(d[0, :, 0]).max()
@@ -239,6 +248,11 @@ def _kernel_case(nz, ni, kind):
         d[0, 5, 0] = -d[0, 2, 0]
     elif kind == "singular":
         d[0, 3] = d[0, 1]
+    elif kind == "huge":
+        d[0, 7, 0] = 3.0 * np.abs(d[0, :, 0]).max()
+        d[0, 7] *= 2.0**1003
+    elif kind == "tiny":
+        d[0, 3] *= 2.0**-975
     return d, s, c, r
 
 
@@ -341,6 +355,31 @@ def test_cuda_kernel_matches_cpu_kernel(nz, ni, kind, factor, factor_variant_run
     for name, i in (("lu", 0), ("x", 2), ("stacked x", 3)):
         errs[name] = _assert_close(gpu[i], cpu[i], rtol, name, same_nonfinite=factor == "lu")
     print(f"\n{factor} {key} vs CPU kernel: " + ", ".join(f"{k} {v:.1e}" for k, v in errs.items()))
+
+
+@pytest.mark.parametrize("nz,ni,kind", [c for c in KERNEL_CASES if c[2] != "singular"])
+def test_gauss_jordan_pivot_step_is_the_lu_kernels(nz, ni, kind, factor_variant_runs):
+    """The Gauss-Jordan factor's pivot step (a REDUX argmax on sm_80+, the
+    multipliers as corrected products with the IEEE 1 / piv, IEEE divisions
+    outside that range) against the LU kernel's shared-memory sweep with its
+    divisions: the first layer is the same partial-pivot sweep in both, so lu
+    and perm must agree byte for byte. `huge` and `tiny` put the first layer's
+    pivot or multiplier numerators outside the corrected range, so the warp
+    takes the division fallback there (asserted on the inputs); the others run
+    the corrected products throughout."""
+    _cuda_device()
+    gj, lu = factor_variant_runs("gj"), factor_variant_runs("lu")
+    key = f"{nz}_{ni}_{kind}"
+    for run in (gj, lu):
+        assert f"{key}/error" not in run, str(run.get(f"{key}/error"))
+    d0 = _kernel_case(nz, ni, kind)[0][0]
+    if kind == "huge":
+        assert np.abs(d0).max() > GJ_RCP_PIV_MAX
+    elif kind == "tiny":
+        assert 0.0 < np.abs(d0[3]).max() < GJ_RCP_QUOT_MIN
+    assert gj[f"{key}/perm"][0].tobytes() == lu[f"{key}/perm"][0].tobytes()
+    assert gj[f"{key}/lu"][0].tobytes() == lu[f"{key}/lu"][0].tobytes()
+    assert np.isfinite(gj[f"{key}/x"]).all()
 
 
 def test_factor_kernel_choice(factor_variant_runs):
