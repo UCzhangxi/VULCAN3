@@ -65,6 +65,14 @@ larger networks use a shared-memory LU kernel. On a GH200 with the WASP-39 b
 network (89 species, 396 columns) the factorization and the two solves of a
 step take 24.5 ms instead of 39.0 ms, and a whole step 60.7 ms instead of
 75.2 ms. `VULCAN3_BT_FACTOR=lu` selects the LU kernel for any network.
+On sm_80 and newer the Gauss-Jordan pivot search uses warp REDUX operations,
+its multipliers are corrected products with the IEEE reciprocal, and the
+solve stages each layer's factors with `cp.async`; the results are bitwise
+the same. On a GH200 at 792 columns the factorization then takes 23.1 ms
+instead of 29.1 ms and a solve 4.6 ms instead of 5.3 ms (6.4 and 1.6 ms
+instead of 8.4 and 2.6 ms at 132 columns), and a 2376-job pass-1 batch of
+the WASP-39 b retrieval (792 lanes, compacted to 264 and 132) runs in 301 s
+instead of 344 s.
 
 `VULCAN3_CHEM_RHS=grouped` (also read at first import) evaluates the
 chemistry right-hand side as one vectorised gather per reaction signature

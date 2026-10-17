@@ -62,7 +62,12 @@ FACTOR_VARIANTS = ("gj", "lu")
 GJ_MAX_NI = 96
 # (nz, ni, kind) of `_kernel_case` compared with the CPU kernel.
 KERNEL_CASES = [(1, 5, "random"), (3, 16, "random"), (4, 33, "random"), (6, 64, "random"),
-                (3, 16, "tie"), (3, 16, "singular"), (3, 16, "huge"), (3, 16, "tiny")]
+                (3, 16, "tie"), (3, 16, "singular"), (3, 16, "huge")]
+# ... and run in the same children for the Gauss-Jordan pivot step only: `tiny`
+# leaves one equation's diagonal-block row 2^-975 smaller than its coupling and
+# rhs, so x reaches ~1e277 and is not determined (two GEPP kernels, the CPU and
+# the CUDA LU one included, differ in it at O(1)); its factors still are.
+GUARD_CASES = [(3, 16, "tiny")]
 # The Gauss-Jordan pivot step takes its multipliers v / piv as the IEEE 1 / piv
 # times v with two FMA corrections while |piv| <= 2^1000 and |v|, |v / piv| >=
 # 2^-960 (block_thomas_cuda.cu kGjRcp*), and divides outside that range.
@@ -240,7 +245,7 @@ def _kernel_case(nz, ni, kind):
     zero pivot. `huge`: row 7, scaled by 2^1003, is the first pivot, beyond
     GJ_RCP_PIV_MAX. `tiny`: row 3, scaled by 2^-975, gives multiplier
     numerators below GJ_RCP_QUOT_MIN until it is pivoted (and 1e294 entries in
-    the next layer). Both stay finite through the sweep."""
+    the next layer; see GUARD_CASES). Both stay finite through the sweep."""
     d, s, c, r = (np.array(a) for a in _system(nz, ni, ni, boost=0.0, scale=1.0))
     if kind == "tie":
         d[0, 2, 0] = 10.0 * np.abs(d[0, :, 0]).max()
@@ -274,10 +279,10 @@ import numpy as np
 repo, out = sys.argv[1:3]
 sys.path.insert(0, os.path.join(repo, "tests"))
 import jax
-from test_solver_fast import CHOICE_CASES, KERNEL_CASES, _RUN_KEYS, _kernel_case, _kernel_run
+from test_solver_fast import CHOICE_CASES, GUARD_CASES, KERNEL_CASES, _RUN_KEYS, _kernel_case, _kernel_run
 dev = jax.devices("cuda")[0]
 res = {}
-for nz, ni, kind in KERNEL_CASES + CHOICE_CASES:
+for nz, ni, kind in KERNEL_CASES + CHOICE_CASES + GUARD_CASES:
     key = f"{nz}_{ni}_{kind}"
     try:
         got = _kernel_run(dev, *_kernel_case(nz, ni, kind))
@@ -291,7 +296,7 @@ np.savez(out, **res)
 @pytest.fixture(scope="module")
 def factor_variant_runs(tmp_path_factory):
     """Per VULCAN3_BT_FACTOR setting ("" for unset), its child's runs of
-    KERNEL_CASES and CHOICE_CASES on the CUDA device, keyed
+    KERNEL_CASES, CHOICE_CASES and GUARD_CASES on the CUDA device, keyed
     "{nz}_{ni}_{kind}/{lu,perm,x,xs}", or ".../error" for a refused call."""
     runs, tmp = {}, tmp_path_factory.mktemp("factor")
 
@@ -357,7 +362,7 @@ def test_cuda_kernel_matches_cpu_kernel(nz, ni, kind, factor, factor_variant_run
     print(f"\n{factor} {key} vs CPU kernel: " + ", ".join(f"{k} {v:.1e}" for k, v in errs.items()))
 
 
-@pytest.mark.parametrize("nz,ni,kind", [c for c in KERNEL_CASES if c[2] != "singular"])
+@pytest.mark.parametrize("nz,ni,kind", [c for c in KERNEL_CASES + GUARD_CASES if c[2] != "singular"])
 def test_gauss_jordan_pivot_step_is_the_lu_kernels(nz, ni, kind, factor_variant_runs):
     """The Gauss-Jordan factor's pivot step (a REDUX argmax on sm_80+, the
     multipliers as corrected products with the IEEE 1 / piv, IEEE divisions
