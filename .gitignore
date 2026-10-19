@@ -5,10 +5,6 @@
 *.so
 *.dylib
 
-# Local-only working documents.
-CLAUDE.md
-notes.md
-todo.md
 
 # Distribution / packaging
 build/
