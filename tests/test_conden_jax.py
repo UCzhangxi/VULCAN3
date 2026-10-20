@@ -12,10 +12,6 @@ condensation integration is out of scope here (HD189 has use_condense=False).
 
 from __future__ import annotations
 
-import os
-import warnings
-from pathlib import Path
-
 import numpy as np
 import jax
 
@@ -25,10 +21,6 @@ import jax.numpy as jnp  # noqa: E402
 from _helpers import relerr  # noqa: E402
 from vulcan3.phy_const import UNDERFLOW_DENOM  # noqa: E402
 
-ROOT = Path(__file__).resolve().parent.parent
-os.chdir(ROOT)
-
-warnings.filterwarnings("ignore")
 
 KERNEL_RTOL = 1e-13
 

@@ -79,7 +79,7 @@ CASES = [
     ),
     (
         "bottom_pins_uncarried",
-        {"use_fix_all_bot": True},
+        {"use_fix_sp_bot": {"H2O": 1.0e-4}},
         None,
         None,
         None,
@@ -90,23 +90,12 @@ CASES = [
     ),
     (
         "bottom_pins_carried",
-        {"use_fix_all_bot": True},
+        {"use_fix_sp_bot": {"H2O": 1.0e-4}},
         None,
         BodyTerms(bot_idx=_BOT),
         None,
         (
             ("bottom_boundary_pins", "info"),
-            ("open_boundary_deflation", "info"),
-        ),
-    ),
-    (
-        "bottom_pins_via_sp_bot_dict",
-        {"use_fix_sp_bot": {"H2O": 1.0e-4}},
-        None,
-        None,
-        None,
-        (
-            ("bottom_boundary_pins", "error"),
             ("open_boundary_deflation", "info"),
         ),
     ),

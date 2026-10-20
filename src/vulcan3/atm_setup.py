@@ -72,8 +72,7 @@ def high_temp_cut_regrid(
     the first deep level that is cool enough (floored at ``P_min``) and the
     column is re-gridded onto ``nz`` logspaced levels down to ``P_t``.
     Returns ``None`` when no cut is needed. NumPy port of vm_branch
-    ``build_atm.apply_high_temp_cut``; host-side setup only (not part of the
-    on-graph ``atm_jax.build_atm_static`` path).
+    ``build_atm.apply_high_temp_cut``; host-side setup only.
     """
     pco = np.asarray(pco, dtype=np.float64)
     Tco = np.asarray(Tco, dtype=np.float64)
@@ -398,8 +397,8 @@ def _scan_up_mu_dz_g(
         z_next = z_prev + dz_i
         return (z_next, gz_i, Hp_i), (gz_i, Hp_i, dz_i, z_next)
 
-    # jnp.asarray (not jnp.float64) keeps the carry tracer-safe so the
-    # differentiable builder in atm_jax.py can pass a traced `gs`.
+    # jnp.asarray (not jnp.float64) keeps the carry tracer-safe for a traced
+    # `gs`.
     init = (jnp.float64(0.0), jnp.asarray(gs, dtype=jnp.float64), jnp.float64(0.0))
     n_up = nz - pref_indx
     idx = jnp.arange(n_up)
@@ -445,10 +444,9 @@ def _scan_down_mu_dz_g(
 def mu_dz_g_jax(pref_indx: int, gs, Rp, Tco, mu, pico, nz: int):
     """Hydrostatic height integration on the JAX graph, anchored at `pref_indx`.
 
-    Shared by the host setup path (:func:`compute_mu_dz_g`) and the
-    differentiable builder (`atm_jax.build_atm_static`), so no reassociation
-    can move float64 bits between them. `pref_indx` is a discrete host-side
-    choice and is passed in.
+    The host setup path (:func:`compute_mu_dz_g`) runs it on the graph too, so
+    a traced caller gets the same float64 bits. `pref_indx` is a discrete
+    host-side choice and is passed in.
 
     Returns (g, Hp, dz, zco, zmco, dzi, Ti, Hpi) as jnp arrays.
     """
@@ -678,7 +676,7 @@ def mol_diff_jax(atm_base: str, Tco, n_0, g, Hp, dz, ms, alpha, nongas_mask,
     """Molecular diffusion on the JAX graph: (Dzz, Dzz_cen, vm).
 
     Shared by the host setup path (:func:`compute_mol_diff`) and the
-    differentiable builder (`atm_jax._mol_diff`). Callers gate
+    on-graph `atm_jax._mol_diff`. Callers gate
     `use_moldiff` themselves. `Dzz` is on the cell interfaces (nz-1, ni),
     `Dzz_cen` the cell-centered companion kept for the `.vul` diagnostic
     surface, `vm` the interface-centered advective (drift) component.

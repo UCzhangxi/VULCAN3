@@ -10,32 +10,18 @@ forced to ['H'] on both sides), is held to REFRESH_RTOL.
 from __future__ import annotations
 
 import copy
-import os
-import sys
-import warnings
-from pathlib import Path
 
 import numpy as np
 
-ROOT = Path(__file__).resolve().parent.parent
-os.chdir(ROOT)
-
-from _helpers import relerr  # noqa: E402
-from oracle import oracle_dir_or_skip  # noqa: E402
-
-# The parent verifies the pin and passes a temporary copy (oracle.oracle_dir_or_skip).
-VULCAN_MASTER = oracle_dir_or_skip("this atm-refresh comparison")
-
-warnings.filterwarnings("ignore")
-
+from _helpers import relerr
+from oracle import assert_below, enter_master, leave_master, run_oracle_subprocess
 
 REFRESH_RTOL = 1e-12
 EXACT_RTOL = 1e-13  # the same formula on both sides, roundoff only
 
 
-def main() -> int:
-    os.chdir(VULCAN_MASTER)
-    sys.path.append(str(VULCAN_MASTER))
+def main() -> None:
+    enter_master()
     from vulcan3.config import default_config
 
     vulcan_cfg = default_config()
@@ -46,7 +32,7 @@ def main() -> int:
     vulcan_cfg.diff_esc = ["H"]
     master_cfg.diff_esc = ["H"]
 
-    os.chdir(ROOT)
+    leave_master()
     import vulcan3.op_jax as op_jax
     import vulcan3.outer_loop as outer_loop
     from vulcan3 import atm_refresh
@@ -98,37 +84,27 @@ def main() -> int:
         init_state.y, g_B, Hp_B, init_state.top_flux, st
     )
 
-    ok = True
     from vulcan3.phy_const import UNDERFLOW_DENOM
 
-    for label, A, B, rtol in (
-        ("mu", atm_A.mu, mu_B, EXACT_RTOL),
-        ("g", atm_A.g, g_B, REFRESH_RTOL),
-        ("Hp", atm_A.Hp, Hp_B, REFRESH_RTOL),
-        ("dz", atm_A.dz, dz_B, REFRESH_RTOL),
-        ("dzi", atm_A.dzi, dzi_B, REFRESH_RTOL),
-        ("Hpi", atm_A.Hpi, Hpi_B, REFRESH_RTOL),
-        ("zco", atm_A.zco, zco_B, REFRESH_RTOL),
-        ("top_flux", atm_A.top_flux, top_flux_B, REFRESH_RTOL),
-    ):
-        err = relerr(B, A, floor=UNDERFLOW_DENOM)
-        print(f"{label:14s} relerr: {err:.3e}")
-        if err > rtol:
-            print(f"FAIL: {label} mismatch")
-            ok = False
-
-    print()
-    print("PASS" if ok else "FAIL")
-    return 0 if ok else 1
+    assert_below({
+        label: (relerr(B, A, floor=UNDERFLOW_DENOM), rtol)
+        for label, A, B, rtol in (
+            ("mu", atm_A.mu, mu_B, EXACT_RTOL),
+            ("g", atm_A.g, g_B, REFRESH_RTOL),
+            ("Hp", atm_A.Hp, Hp_B, REFRESH_RTOL),
+            ("dz", atm_A.dz, dz_B, REFRESH_RTOL),
+            ("dzi", atm_A.dzi, dzi_B, REFRESH_RTOL),
+            ("Hpi", atm_A.Hpi, Hpi_B, REFRESH_RTOL),
+            ("zco", atm_A.zco, zco_B, REFRESH_RTOL),
+            ("top_flux", atm_A.top_flux, top_flux_B, REFRESH_RTOL),
+        )
+    })
 
 
 def test_main():
-    """Run the master comparison in a fresh Python process."""
-    from oracle import run_oracle_subprocess
-
     run_oracle_subprocess(__file__, "vulcan2_ncho",
                           "cfg_examples/vulcan_cfg_HD189.py")
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()

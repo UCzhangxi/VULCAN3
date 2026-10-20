@@ -1,7 +1,5 @@
 """Shared pytest setup for VULCAN-JAX tests.
 
-Script-style test files keep a `main()` entry plus a thin
-`test_main(): assert main() == 0` wrapper so pytest collects them.
 The `hd189_state` fixture hands out a per-test deep copy of the session-built
 HD189 pre-loop state so tests avoid re-running rates / the EQ seed / photo setup.
 """

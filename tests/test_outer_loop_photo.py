@@ -2,9 +2,8 @@
 compute_tau / compute_flux / compute_J round-trip on HD189.
 
 Both paths share the same JAX kernels, so tau / fluxes / aflux_change /
-photo k_arr rows must agree to <= 1e-13; anything beyond that is a wiring bug
-in the carry plumbing. J_sp is read through the production .vul writer, which
-recomputes cross x aflux on the host, so it is held to WRITER_RTOL.
+photo k_arr rows and the .vul writer's J_sp must agree to <= 1e-13; anything
+beyond that is a wiring bug in the carry plumbing.
 """
 
 from __future__ import annotations
@@ -17,10 +16,6 @@ from vulcan3.phy_const import UNDERFLOW_DENOM
 
 
 PHOTO_RTOL = 1e-13
-# The writer's host-side cross x aflux sum against compute_J: measured 2.0e-8
-# relative at worst on HD189 (C2H6 branch 1); the chemistry's k_arr rows hold
-# PHOTO_RTOL.
-WRITER_RTOL = 1e-7
 
 
 def test_photo_branch_matches_python_photo_path():
@@ -97,11 +92,11 @@ def test_photo_branch_matches_python_photo_path():
     err_k = relerr(final_state.k_arr[1:], data_var.k_arr[1:], floor=1e-300)
     assert err_k <= PHOTO_RTOL, f"k_arr relerr {err_k:.3e}"
 
-    # J_sp through the production .vul writer (cross x aflux per branch plus
-    # the (sp, 0) totals, op.py:2764, 2783), not a copy of it here.
+    # J_sp through the production .vul writer (every branch plus the (sp, 0)
+    # totals, op.py:2764, 2783) against compute_J's.
     rs_B = integ._unpack_state_to_runstate(final_state, rs_entry)
     J_sp_B = op._synthesize_save_dicts(rs_B, vulcan_cfg)[0]["J_sp"]
     for key, ref in data_var.J_sp.items():
         assert key in J_sp_B, f"J_sp[{key}] missing from the writer"
         err = relerr(J_sp_B[key], ref, floor=1e-300)
-        assert err <= WRITER_RTOL, f"J_sp[{key}] relerr {err:.3e}"
+        assert err <= PHOTO_RTOL, f"J_sp[{key}] relerr {err:.3e}"

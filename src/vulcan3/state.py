@@ -20,7 +20,6 @@ import numpy as np
 from . import chem_funs
 from .config import default_config
 from ._paths import resolve_data_path
-from .make_chem_funs import network_signature
 
 
 class AtmInputs(NamedTuple):
@@ -516,51 +515,44 @@ def _runmetadata_from_legacy(var, atm, para) -> RunMetadata:
     )
 
 
+def _same_file(want: str, have: str, what: str) -> bool:
+    """True when `want` is `have` or a byte-identical copy of it. An
+    unreadable pair warns and counts as a match: the skip announces itself."""
+    if want == have:
+        return True
+    try:
+        with open(want, "rb") as _w, open(have, "rb") as _h:
+            return _w.read() == _h.read()
+    except FileNotFoundError:
+        return False  # the requested file is missing -> a mismatch
+    except OSError as exc:
+        warnings.warn(
+            f"{what} import-lock guard could not compare {want!r} with the "
+            f"import-time {have!r} ({type(exc).__name__}: {exc}); the check "
+            "was SKIPPED, not passed.",
+            RuntimeWarning,
+            stacklevel=3,
+        )
+        return True
+
+
 def _assert_network_matches_import(cfg) -> None:
     """Fail fast if cfg requests a different network than the import-locked one.
 
     The network (``ni``/``nr``/``spec_list`` + codegen RHS) is parsed once at
     the first ``import vulcan3``; select another with
     ``$VULCAN3_NETWORK`` before the first import (or the subprocess
-    driver). Compatibility means the same species names and reaction
-    topology; a byte-identical copy at another path passes.
+    driver). A byte-identical copy at another path passes.
     """
     want_path = str(Path(resolve_data_path(cfg.network)).resolve())
-    import_net = chem_funs._NETWORK
-    have_path = str(Path(import_net.network_path).resolve())
-    if want_path == have_path:
-        return  # identical file: fast path, no reparse on the common case
-
-    # Different path: reparse and compare topology (fixes the codegen RHS and
-    # k_arr indexing) and species names (the hash is index-based, so a
-    # renamed species leaves it identical). If it cannot be parsed, warn and
-    # defer to the k_arr check.
-    from . import network as _net_mod
-
-    try:
-        want_net = _net_mod.parse_network(want_path)
-    except (OSError, ValueError) as exc:
-        # Announce the skip (skipped != passed), as the com_file guard does.
-        warnings.warn(
-            f"network import-lock guard could not parse cfg.network={want_path!r} "
-            f"({type(exc).__name__}: {exc}); the check was SKIPPED, not passed.",
-            RuntimeWarning, stacklevel=2)
+    have_path = str(Path(chem_funs._NETWORK.network_path).resolve())
+    if _same_file(want_path, have_path, "network"):
         return
-    if list(want_net.species) == list(import_net.species) and (
-        network_signature(want_net) == network_signature(import_net)
-    ):
-        return  # same species AND topology -> codegen RHS + metadata compatible
-
     raise ValueError(
         "VULCAN3 reaction network is import-locked. It is parsed once at "
         "the first `import vulcan3` and cannot be changed afterward.\n"
-        f"  import-time network : {have_path} "
-        f"({import_net.ni} species, {import_net.nr} reactions)\n"
-        f"  cfg.network requests: {want_path} "
-        f"({want_net.ni} species, {want_net.nr} reactions)\n"
-        "The requested network differs in species, reaction count, or reaction "
-        "topology (order / stoichiometry) from the import-locked one, so its "
-        "rates cannot be paired with the import-time codegen RHS. "
+        f"  import-time network : {have_path}\n"
+        f"  cfg.network requests: {want_path}\n"
         "make_config(network=...) cannot hot-swap the network in-process. Set "
         "the environment variable VULCAN3_NETWORK to the desired network "
         "path BEFORE the first `import vulcan3` (or use the subprocess driver)."
@@ -579,26 +571,8 @@ def _assert_com_file_matches_import(cfg) -> None:
 
     have_r = str(Path(_composition.COM_FILE_PATH).resolve())
     want_r = str(Path(resolve_data_path(cfg.com_file)).resolve())
-    if want_r == have_r:
+    if _same_file(want_r, have_r, "com_file"):
         return
-    try:
-        with open(want_r, "rb") as _w, open(have_r, "rb") as _h:
-            if _w.read() == _h.read():
-                return  # same table content at a different vendored path
-    except FileNotFoundError:
-        pass  # requested table is missing -> definitely a mismatch
-    except OSError as exc:
-        # Announce the skip (skipped != passed); a silent return reads as a pass.
-        warnings.warn(
-            f"com_file import-lock guard could not compare tables "
-            f"({type(exc).__name__}: {exc}); the check was SKIPPED, not passed. "
-            f"cfg.com_file={want_r!r} vs import-time {have_r!r}; if these differ "
-            f"in content, ini_abun is using the import-time table.",
-            RuntimeWarning,
-            stacklevel=2,
-        )
-        return
-
     raise ValueError(
         "VULCAN3 composition table (com_file) is import-locked. It is loaded "
         "once into composition.py at the first `import vulcan3` and cannot be "

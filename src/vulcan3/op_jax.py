@@ -120,11 +120,10 @@ class Ros2JAX:
         )
 
     def naming_solver(self, para):
-        """Log transport / BC summary lines and stamp `para.solver_str`."""
+        """Log the molecular-diffusion line and stamp `para.solver_str`
+        (op.py:3078-3088)."""
         if _CFG.use_moldiff:
             logger.info("Include molecular diffusion.")
         else:
             logger.info("No molecular diffusion.")
-        if _CFG.use_fix_all_bot:
-            logger.info("Use fixed bottom BC.")
         para.solver_str = "solver"

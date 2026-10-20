@@ -11,15 +11,8 @@ must agree to machine precision on a real (y, M, k) state.
 
 from __future__ import annotations
 
-import os
-import warnings
-from pathlib import Path
-
 import numpy as np
 
-ROOT = Path(__file__).resolve().parent.parent
-os.chdir(ROOT)
-warnings.filterwarnings("ignore")
 
 JAC_RTOL = 1e-12  # the same matrix by two summation orders
 SIGNIFICANT_FRAC = 1e-12  # entries below this fraction of the peak are cancellation noise

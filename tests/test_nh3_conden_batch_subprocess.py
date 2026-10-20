@@ -24,6 +24,7 @@ warnings.filterwarnings("ignore")
 from pathlib import Path
 repo = Path(sys.argv[1])
 sys.path.insert(0, str(repo / "src"))
+sys.path.insert(0, str(repo / "tests"))
 os.chdir(repo / "src" / "vulcan3")
 
 import numpy as np
@@ -106,11 +107,12 @@ print(f"TOPS A={topA} B={topB}")
 # would silently use A's value while soloB uses B's -> divergence.
 soloA = integA._runner(sA, atmA)
 soloB = integB._runner(sB, atmB)
+from _helpers import stack_atm_statics, stack_integ_states, unstack_integ_states
 batched = integA.run_batch(
-    outer_loop.stack_integ_states([sA, sB]),
-    outer_loop.stack_atm_statics([atmA, atmB]),
+    stack_integ_states([sA, sB]),
+    stack_atm_statics([atmA, atmB]),
 )
-out = outer_loop.unstack_integ_states(batched, 2)
+out = unstack_integ_states(batched, 2)
 
 # vmap reorders reductions, so trace radicals (<1e-10) diverge chaotically
 # between batch and solo; only ymix > 1e-4 is compared. A per-lane leak

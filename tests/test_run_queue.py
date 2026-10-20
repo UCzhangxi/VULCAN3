@@ -27,6 +27,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from _helpers import stack_atm_statics, stack_integ_states
 from test_vmap_while_loop import (
     RTOL,
     _build_integ,
@@ -101,15 +102,14 @@ def _out_fn(final):
 @pytest.fixture(scope="module")
 def prepared():
     """(integ, stacked states, stacked atmospheres) for the five profiles."""
-    import vulcan3.outer_loop as outer_loop
 
     cfg = _pin_cfg()
     integ = _build_integ()
     pairs = [integ.prepare_runstate(_build_rs(cfg, Tiso=T)) for T in TISO]
     return (
         integ,
-        outer_loop.stack_integ_states([s for s, _ in pairs]),
-        outer_loop.stack_atm_statics([a for _, a in pairs]),
+        stack_integ_states([s for s, _ in pairs]),
+        stack_atm_statics([a for _, a in pairs]),
     )
 
 
@@ -150,13 +150,12 @@ def test_queue_jvp_without_refill_is_the_batch_jvp():
     programs cheap."""
     from _helpers import fast_cfg
 
-    from vulcan3 import outer_loop
 
     cfg = fast_cfg(count_max=8, nz=12, use_vm_mol=False, use_hybrid_vm_mol=False)
     integ = _build_integ()
     pairs = [integ.prepare_runstate(_build_rs(cfg, Tiso=T)) for T in (900.0, 1200.0)]
-    s0 = outer_loop.stack_integ_states([s for s, _ in pairs])
-    a0 = outer_loop.stack_atm_statics([a for _, a in pairs])
+    s0 = stack_integ_states([s for s, _ in pairs])
+    a0 = stack_atm_statics([a for _, a in pairs])
 
     def jobs(x):
         """Every lane's Kzz scaled by exp(x): d/d ln Kzz at x = 0."""

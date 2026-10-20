@@ -4,7 +4,7 @@ Covers `apply_lowT_caps` (Moses+2005 cap formulas), `apply_remove_list`
 (literal indices only, no partner auto-zero), and `build_rate_array`
 end-to-end against the `k_arr` the pre-loop froze on the HD189 fixture
 (no VULCAN-master sibling required). Parity against master itself is
-`test_rates.py` / `test_gibbs.py`.
+`test_gibbs.py`.
 """
 
 from __future__ import annotations

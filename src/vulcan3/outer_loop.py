@@ -116,7 +116,6 @@ class ProfileVars(NamedTuple):
     Kzz: jnp.ndarray  # (nz-1,)            eddy diffusion (cond_fn slope_min)
     atom_ini: jnp.ndarray  # (n_atoms,)    initial atom abundances (atom_loss)
     y_ini: jnp.ndarray  # (nz, ni)         initial column (element-budget term)
-    bottom_n: jnp.ndarray  # (ni,)         fix-all-bot pin (ymix[0]*n_0[0])
     fix_species_sat_mix: jnp.ndarray  # (n_fix_species, nz)
     # from AtmRefreshStatic
     r_Tco: jnp.ndarray  # (nz,)            atm-refresh temperature
@@ -515,6 +514,41 @@ def _make_photo_branch(photo_static: _PhotoStatic):
     return photo_branch
 
 
+def _splice_conden(conden_static, pv: ProfileVars):
+    """The baked `CondenStatic` with this lane's per-profile arrays (see
+    ProfileVars); its other fields stay baked and must be batch-constant.
+    nh3_conden_top is a 0-d int32 only compared against jnp.arange."""
+    return conden_static._replace(
+        Dg_per_re=pv.c_Dg_per_re,
+        sat_n_per_re=pv.c_sat_n_per_re,
+        h2o_Dg=pv.c_h2o_Dg,
+        h2o_sat=pv.c_h2o_sat,
+        nh3_Dg=pv.c_nh3_Dg,
+        nh3_sat=pv.c_nh3_sat,
+        nh3_conden_top=pv.c_nh3_conden_top,
+        n_0=pv.n_0,
+    )
+
+
+def _splice_step_atm(atm_static, s, use_vm_mol: bool, kb: float, Navo: float):
+    """The step's `AtmStatic`: the carry's refreshed geometry (op.py:905-907)
+    and hybrid vm_mol phase, and under `use_vm_mol` the vm recomputed from them.
+
+    `jax_ros2_step` reads use_vm_mol as a float multiplier; non-hybrid runs
+    never flip it, so it equals `atm_static.use_vm_mol` bit-for-bit. vm depends
+    on mu (via Hpi) and g, so it is refreshed with the geometry
+    (vm_branch@84d010d op.py:992, update_mu_dz); its inputs change only at
+    refresh cadence, so a per-step recompute keeps upstream's cadence.
+    """
+    atm = atm_static._replace(g=s.g, dzi=s.dzi, Hpi=s.Hpi, top_flux=s.top_flux,
+                              vs=s.vs, use_vm_mol=s.hybrid_use_vm)
+    if use_vm_mol:
+        atm = atm._replace(vm=_atm_refresh_mod.recompute_vm_jax(
+            s.g, s.Hpi, s.dzi, atm_static.Dzz, atm_static.ms, atm_static.alpha,
+            atm_static.Tco, kb, Navo))
+    return atm
+
+
 def _make_conden_branch(conden_static: _conden_mod.CondenStatic):
     """Build the in-loop conden closure.
 
@@ -524,20 +558,7 @@ def _make_conden_branch(conden_static: _conden_mod.CondenStatic):
     """
 
     def conden_branch(s: JaxIntegState) -> JaxIntegState:
-        # Splice this lane's per-profile conden arrays (see ProfileVars) into
-        # the baked static; its other fields stay baked and must be
-        # batch-constant. nh3_conden_top is a 0-d int32 only compared
-        # against jnp.arange.
-        st = conden_static._replace(
-            Dg_per_re=s.pv.c_Dg_per_re,
-            sat_n_per_re=s.pv.c_sat_n_per_re,
-            h2o_Dg=s.pv.c_h2o_Dg,
-            h2o_sat=s.pv.c_h2o_sat,
-            nh3_Dg=s.pv.c_nh3_Dg,
-            nh3_sat=s.pv.c_nh3_sat,
-            nh3_conden_top=s.pv.c_nh3_conden_top,
-            n_0=s.pv.n_0,
-        )
+        st = _splice_conden(conden_static, s.pv)
         k_arr_new = _conden_mod.update_conden_rates(s.k_arr, s.y, st)
         y_new, ymix_new = _conden_mod.apply_h2o_relax_jax(s.y, s.ymix, s.dt, st)
         y_new, ymix_new = _conden_mod.apply_nh3_relax_jax(y_new, ymix_new, s.dt, st)
@@ -611,13 +632,11 @@ class _Statics(NamedTuple):
     step_size_safety: float
     step_size_zero_delta_frac: float
 
-    # Ion / fix-all-bot. Bools branch at trace time; when off, the
-    # corresponding arrays are zero placeholders the body never reads.
+    # Ion. The bool branches at trace time; when off, the arrays are zero
+    # placeholders the body never reads.
     use_ion: bool
     e_idx: int  # species index of 'e' (0 if use_ion=False)
     charge_arr: jnp.ndarray  # (ni,) compo[i]['e'] over charge_list, 0 elsewhere
-    use_fix_all_bot: bool
-    bottom_n: jnp.ndarray  # (ni,) bottom_ymix * n_0[0]; pinned each step
     use_fix_sp_bot: bool
     fix_sp_bot_idx: jnp.ndarray  # (n_fix_sp_bot,) int32
     fix_sp_bot_mix: jnp.ndarray  # (n_fix_sp_bot,)
@@ -959,34 +978,8 @@ def _make_runner(
                     for f in _PHOTO_FIELDS
                 })
 
-        # Splice the carry's refreshed geometry (op.py:905-907) into AtmStatic
-        # for this step.
-        atm_step = atm_static_._replace(
-            g=s.g, dzi=s.dzi, Hpi=s.Hpi, top_flux=s.top_flux, vs=s.vs
-        )
-        # Hybrid vm_mol: drive the vm/central blend from the carry phase
-        # (jax_ros2_step reads use_vm_mol as a float multiplier). Non-hybrid
-        # runs never flip it, so this equals atm_static_.use_vm_mol bit-for-bit.
-        atm_step = atm_step._replace(use_vm_mol=s.hybrid_use_vm)
-        # vm depends on mu (via Hpi) and g, so it must be refreshed in-loop
-        # with the geometry (vm_branch@84d010d op.py:992, update_mu_dz); freezing it at setup
-        # biases a
-        # mol-diff-dominated upper atmosphere. Its inputs change only at
-        # refresh cadence, so per-step recompute reproduces upstream's cadence.
-        if statics.use_vm_mol:
-            atm_step = atm_step._replace(
-                vm=_atm_refresh_mod.recompute_vm_jax(
-                    s.g,
-                    s.Hpi,
-                    s.dzi,
-                    atm_static_.Dzz,
-                    atm_static_.ms,
-                    atm_static_.alpha,
-                    atm_static_.Tco,
-                    refresh_static.kb,
-                    refresh_static.Navo,
-                )
-            )
+        atm_step = _splice_step_atm(atm_static_, s, statics.use_vm_mol,
+                                    refresh_static.kb, refresh_static.Navo)
 
         # use_ion: master pins the electron rows inside both Ros2 stages
         # (op.py:2908-2911, 2925-2926) so sol[e]=y[e], delta[e]=0; 'e' is then
@@ -1173,11 +1166,6 @@ def _make_runner(
         if statics.use_ion:
             e_density = -jnp.einsum("zi,i->z", sol_balanced, statics.charge_arr)
             sol_balanced = sol_balanced.at[:, statics.e_idx].set(e_density)
-
-        # fix-all-bot pin: bottom layer fixed to chem-EQ mixing ratios
-        # snapshotted at init, scaled by n_0[0]. Trace-time branch.
-        if statics.use_fix_all_bot:
-            sol_balanced = sol_balanced.at[0].set(s.pv.bottom_n)
 
         # y / ymix / atom_loss for the next iteration.
         y_next = jnp.where(do_accept, sol_balanced, s.y_prev)
@@ -2177,42 +2165,6 @@ _ATM_ARRAY_FIELDS = tuple(
 )
 
 
-def stack_integ_states(states: "list[JaxIntegState]") -> JaxIntegState:
-    """Stack single-profile `JaxIntegState`s into one batched state.
-
-    Every leaf gains a leading batch axis. All inputs must share identical
-    leaf shapes (same nz / ni / network): bucket by `nz` before calling.
-    """
-    return jax.tree_util.tree_map(lambda *xs: jnp.stack(xs, axis=0), *states)
-
-
-def unstack_integ_states(batched: JaxIntegState, n: int) -> "list[JaxIntegState]":
-    """Split a batched `JaxIntegState` into `n` single-profile states."""
-    return [jax.tree_util.tree_map(lambda x, i=i: x[i], batched) for i in range(n)]
-
-
-def stack_atm_statics(atms: "list[AtmStatic]") -> AtmStatic:
-    """Stack single-profile `AtmStatic`s into one batched `AtmStatic`.
-
-    Array leaves gain a leading batch axis; the four toggle flags are kept as
-    scalars (broadcast under vmap via `_ATM_STATIC_BATCH_AXES`) and must be
-    identical across the batch: bucket by toggle-combo before calling.
-    """
-    first = atms[0]
-    flags = [f for f in AtmStatic._fields if f not in _ATM_ARRAY_FIELDS]
-    for a in atms[1:]:
-        if any(getattr(a, f) != getattr(first, f) for f in flags):
-            raise ValueError(
-                "stack_atm_statics: AtmStatic toggle flags differ across the "
-                "batch; bucket profiles by toggle-combo before stacking."
-            )
-    stacked = {
-        name: jnp.stack([jnp.asarray(getattr(a, name)) for a in atms], axis=0)
-        for name in _ATM_ARRAY_FIELDS
-    }
-    return first._replace(**stacked)
-
-
 def _longdy_reduce(
     y, ymix, y_old, n_0, *, atol, mtol_conv, ignore_mask=None, condense_mask=None,
     diff=None,
@@ -2351,8 +2303,8 @@ class OuterLoop:
                 if sp in _NETWORK.species_idx:
                     cond_zero_conv_np[:, _NETWORK.species_idx[sp]] = True
 
-        # Ion / fix-all-bot masks are zeros when their flag is off; the body's
-        # Python `if use_*_static:` skips them at trace time.
+        # The ion masks are zeros when use_ion is off; the body's Python
+        # `if statics.use_ion:` skips them at trace time.
         use_ion = bool(self._cfg.use_ion)
         if use_ion:
             charge_list = list(getattr(var, "charge_list", []))
@@ -2369,15 +2321,6 @@ class OuterLoop:
         else:
             charge_np = np.zeros(ni, dtype=np.float64)
             e_idx = 0
-
-        use_fix_all_bot = bool(self._cfg.use_fix_all_bot)
-        if use_fix_all_bot:
-            # Pin bottom layer to chemical-EQ mixing ratios captured at
-            # init time, scaled by static n_0[0] (op.py:3019, 3047-3048; a solver upstream never selects,
-            # see naming_solver op.py:3080-3083).
-            bottom_n_np = np.asarray(var.ymix[0], dtype=np.float64) * float(atm.n_0[0])
-        else:
-            bottom_n_np = np.zeros(ni, dtype=np.float64)
 
         fix_sp_bot_cfg = self._cfg.use_fix_sp_bot or {}
         use_fix_sp_bot = bool(fix_sp_bot_cfg)
@@ -2482,8 +2425,6 @@ class OuterLoop:
             use_ion=use_ion,
             e_idx=int(e_idx),
             charge_arr=jnp.asarray(charge_np),
-            use_fix_all_bot=use_fix_all_bot,
-            bottom_n=jnp.asarray(bottom_n_np),
             use_fix_sp_bot=use_fix_sp_bot,
             fix_sp_bot_idx=jnp.asarray(fix_sp_bot_idx),
             fix_sp_bot_mix=jnp.asarray(fix_sp_bot_mix),
@@ -2947,7 +2888,6 @@ class OuterLoop:
             Kzz=jnp.asarray(statics.Kzz, dtype=jnp.float64),
             atom_ini=jnp.asarray(statics.atom_ini_arr, dtype=jnp.float64),
             y_ini=jnp.asarray(rs.metadata.y_ini, dtype=jnp.float64),
-            bottom_n=jnp.asarray(statics.bottom_n, dtype=jnp.float64),
             fix_species_sat_mix=jnp.asarray(
                 statics.fix_species_sat_mix, dtype=jnp.float64
             ),
@@ -3232,40 +3172,14 @@ class OuterLoop:
         """End-of-run report (op.py:1069-1085 and op.stop): print_prog,
         then print_end_msg (end_case 1) or print_unconverged_msg, which
         states the reason (2 / 3 / 5).
-
-        The printers take a legacy (var, para) pair and read only the
-        counters, start_time, termination_reason, atom_loss and
-        where_varies_most, plus var.t / var.dt / var.longdy / var.longdydt.
         """
-        import types
-
-        var = types.SimpleNamespace(
-            t=float(rs.step.t),
-            dt=float(rs.step.dt),
-            longdy=float(rs.step.longdy),
-            longdydt=float(rs.step.longdydt),
-            atom_loss={
-                a: float(np.asarray(rs.atoms.atom_loss)[i])
-                for i, a in enumerate(rs.atoms.atom_order)
-            },
-        )
-        para = types.SimpleNamespace(
-            count=int(rs.params.count),
-            nega_count=int(rs.params.nega_count),
-            loss_count=int(rs.params.loss_count),
-            delta_count=int(rs.params.delta_count),
-            where_varies_most=np.asarray(rs.params.where_varies_most),
-            termination_reason=int(rs.params.termination_reason),
-            start_time=float(rs.metadata.start_time),
-        )
-        end_case = int(rs.params.end_case)
+        var, _, para = _state_mod.legacy_view(rs)
+        end_case = para.end_case
         if end_case == TERM_CONVERGED:
-            aflux_change = (rs.photo_runtime.aflux_change
-                            if rs.photo_runtime is not None else 0.0)
             logger.info(
                 f"Integration successful with {para.count} steps and "
-                f"long dy, long dydt = {rs.step.longdy}, {rs.step.longdydt}\n"
-                f"Actinic flux change: {aflux_change:.2E}"
+                f"long dy, long dydt = {var.longdy}, {var.longdydt}\n"
+                f"Actinic flux change: {var.aflux_change:.2E}"
             )
         if self._cfg.use_print_prog:
             self.output.print_prog(var, para)
@@ -3343,8 +3257,7 @@ class OuterLoop:
         runner closure on the first call (later calls reuse it; nz is not checked).
 
         The batched GPU driver calls this per profile, then stacks the
-        results (`stack_integ_states` / `stack_atm_statics`) into one batch
-        for `run_batch`. All profiles in a single `run_batch` call must share
+        results along a leading axis into one batch for `run_batch`. All profiles in a single `run_batch` call must share
         the same nz / toggle-combo / `pref_indx` so the closure and array
         shapes match; the emulator buckets accordingly. `__call__` runs the
         same setup, then the runner.
@@ -3406,8 +3319,7 @@ class OuterLoop:
         `states_batched` / `atm_static_batched` are the stacked outputs of
         `prepare_runstate` (leading batch axis on every array leaf; the four
         AtmStatic toggle flags broadcast). Returns the batched final `JaxIntegState`; read per-lane
-        `termination_reason` / `ymix` after unstacking with
-        `unstack_integ_states`. Requires `_ensure_runner` to have run (via
+        `termination_reason` / `ymix` by indexing the lane axis. Requires `_ensure_runner` to have run (via
         `prepare_runstate`) for this batch's (nz, toggle-combo).
 
         Lanes run with freeze-on-done: each profile's converged result

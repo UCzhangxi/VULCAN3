@@ -8,16 +8,9 @@ All CPU; mirrors `test_vmap_while_loop` for the fast photo-off setup.
 
 from __future__ import annotations
 
-import os
-import warnings
-from pathlib import Path
-
 import numpy as np
 from _helpers import fast_cfg
 
-ROOT = Path(__file__).resolve().parent.parent
-os.chdir(ROOT)
-warnings.filterwarnings("ignore")
 
 
 def test_skip_chem_warmup_runstate_identical():

@@ -9,17 +9,10 @@ Pins, for the default 'gravity' mode and the upwind 'vm' mode:
 
 from __future__ import annotations
 
-import os
-import warnings
-from pathlib import Path
-
 import numpy as np
 import pytest
 from _helpers import relerr
 
-ROOT = Path(__file__).resolve().parent.parent
-os.chdir(ROOT)
-warnings.filterwarnings("ignore")
 
 COEF_RTOL = 1e-11  # C_mol FP-ordering noise reaches ~2e-12; eddy terms ~5e-16
 OP_RTOL = 1e-4  # the operator is a small residue of large cancellations (floor ~1e-5)

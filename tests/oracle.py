@@ -74,33 +74,12 @@ def _fail_or_skip(msg: str):
     pytest.skip(msg)
 
 
-def oracle_dir_or_skip(what: str) -> Path:
-    """Oracle path for a re-exec'd child; skip the module when unset.
-
-    The parent (`run_oracle_subprocess` -> `oracle_worktree` -> `require_oracle`)
-    verifies the pin and points `VULCAN_MASTER_DIR` at a copy with no `.git`, so
-    the child can only check existence. Fails instead under
-    `VULCAN3_REQUIRE_ORACLE=1`.
-    """
-    path = oracle_dir()
-    if path is not None and path.is_dir():
-        return path
-    msg = (
-        f"upstream oracle not configured (looked at "
-        f"{path if path is not None else '$' + ENV_DIR + ' unset'}). Set "
-        f"${ENV_DIR} to a clean clone at the commit pinned in "
-        f"tests/science_sources.yaml; {what} requires the upstream repo.")
-    if os.environ.get(ENV_REQUIRE) == "1":
-        pytest.fail(msg, pytrace=False)
-    pytest.skip(msg, allow_module_level=True)
-
-
 def run_oracle_subprocess(test_file, family: str,
                           config_rel: str | None = None) -> None:
     """Run `test_file`'s `main()` in a fresh process against an oracle COPY.
 
-    The master/JAX module-table swap only works from a cold Python start, so
-    every upstream-comparison test re-execs itself.
+    Upstream's modules are top-level names bound to one copy's cfg, so every
+    upstream-comparison test re-execs itself from a cold Python start.
     """
     with oracle_worktree(family, config_rel) as master:
         env = os.environ.copy()
@@ -113,6 +92,95 @@ def run_oracle_subprocess(test_file, family: str,
         f"--- stdout ---\n{result.stdout}\n"
         f"--- stderr ---\n{result.stderr}"
     )
+
+
+# --- inside the re-exec'd child ------------------------------------------------
+# The parent verified the pin and set VULCAN_MASTER_DIR to a copy with no .git.
+# Upstream imports these modules by top-level name; none of them exists in
+# tests/ or among the port's imports (src/vulcan3 is a package).
+UPSTREAM_MODULES = ("vulcan_cfg", "store", "build_atm", "op", "chem_funs")
+
+
+def enter_master() -> Path:
+    """chdir into the oracle copy (upstream reads its inputs by relative path)
+    and put it first on sys.path."""
+    master = oracle_dir()
+    if master is None or not master.is_dir():
+        raise SystemExit(f"${ENV_DIR} must name the oracle copy; run this file "
+                         "through pytest, which passes one")
+    os.chdir(master)
+    sys.path.insert(0, str(master))
+    return master
+
+
+def leave_master() -> None:
+    """Drop upstream's modules and path entry and chdir back to ROOT, so no
+    later import resolves to upstream. References already held stay valid."""
+    master = str(oracle_dir())
+    for name in UPSTREAM_MODULES:
+        sys.modules.pop(name, None)
+    while master in sys.path:
+        sys.path.remove(master)
+    os.chdir(ROOT)
+
+
+def upstream_preloop(cfg, var, atm, make_atm, rate, ini=None, output=None):
+    """Upstream vulcan.py's pre-loop, in its order, on the caller's objects.
+
+    The caller picks each object's side (upstream or port); only the call
+    sequence is shared. Stops after read_rate without `ini`, after ini_y
+    without `output`, else runs through BC_flux. Returns `(var, atm)`.
+    """
+    atm = make_atm.f_pico(atm)
+    atm = make_atm.load_TPK(atm)
+    if cfg.use_condense:
+        make_atm.sp_sat(atm)
+    var = rate.read_rate(var, atm)
+    if ini is None:
+        return var, atm
+    var = rate.rev_rate(var, atm)
+    var = ini.ini_y(var, atm)
+    if output is None:
+        return var, atm
+    var = ini.ele_sum(var)
+    atm = make_atm.f_mu_dz(var, atm, output)
+    make_atm.mol_diff(atm)
+    make_atm.BC_flux(atm)
+    return var, atm
+
+
+def assert_below(scores: dict[str, tuple[float, float]]) -> None:
+    """Print every `name: (error, bound)`, then fail on each error not below
+    its bound (NaN included)."""
+    for name, (err, bound) in scores.items():
+        print(f"{name}: {err:.3e} (bound {bound:.0e})")
+    over = [name for name, (err, bound) in scores.items() if not err < bound]
+    assert not over, f"over bound: {over}"
+
+
+def write_master_cfg(root: Path, cfg_text: str) -> None:
+    """Write `vulcan_cfg.py` into the oracle COPY at `root` and regenerate its
+    chem_funs.py with upstream's make_chem_funs.py.
+
+    The old module is deleted first, so a failed generator cannot pass by
+    leaving the shipped one importable. make_chem_funs.py writes chem_funs.py
+    before its check_conserv(), which raises under numpy>=1.24; master's
+    vulcan.py ignores that exit code, so the module's importability decides.
+    PYTHONHASHSEED=0 as for every master run (its trajectory depends on set
+    order).
+    """
+    (root / "vulcan_cfg.py").write_text(cfg_text)
+    (root / "chem_funs.py").unlink(missing_ok=True)
+    env = {**os.environ, "PYTHONHASHSEED": "0"}
+    gen = subprocess.run([sys.executable, "make_chem_funs.py"], cwd=root,
+                         env=env, capture_output=True, text=True, timeout=1800)
+    probe = subprocess.run(
+        [sys.executable, "-c", "import chem_funs as c; assert c.ni > 0 and c.nr > 0"],
+        cwd=root, env=env, capture_output=True, text=True, timeout=300)
+    assert probe.returncode == 0, (
+        f"make_chem_funs.py exited {gen.returncode} and left no importable "
+        f"chem_funs:\n{gen.stdout[-2000:]}\n{gen.stderr[-2000:]}\n"
+        f"{probe.stderr[-2000:]}")
 
 
 def require_oracle(family: str) -> Path:

@@ -104,7 +104,6 @@ max_flux: 10000000000000.0
 # Only read when use_fix_H2He is true: the model time at which the H2/He
 # bottom mixing ratios are snapshotted and pinned. Inert otherwise.
 hycean_pin_time: 1000000.0
-use_fix_all_bot: false
 use_fix_H2He: false
 
 # ====== Reactions to be switched off ======

@@ -146,6 +146,10 @@ _REMOVED_KEYS: dict[str, str] = {
         "call `integ(rs, chunk=N)`; remove the key"
     ),
     "ode_solver": "Ros2 is the only solver; remove the key",
+    "use_fix_all_bot": (
+        "VULCAN 2 never selects the all-species bottom pin (op.py:3080-3088); "
+        "pin species with `use_fix_sp_bot` and remove the key"
+    ),
     "gibbs_text": (
         "reverse rates read thermo/NASA9/<species>.txt (gibbs.py); remove "
         "the key"

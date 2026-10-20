@@ -1,14 +1,11 @@
-"""Tests for the differentiable on-graph atmosphere builder (`atm_jax.py`).
+"""Tests for the on-graph atmosphere pieces (`atm_setup.mu_dz_g_jax`,
+`atm_jax._mol_diff`).
 
 Pins two things:
-  1. Equivalence: `build_atm_static` reproduces the production `AtmStatic`
-     (`make_atm_static`) field for field at machine precision -- the two
-     wirings agree, the kernels underneath being shared. (`atm_type='table'`
-     and `use_moldiff=off` intentionally differ; build_atm_static is the more
-     self-consistent one.) Plus the vm expression against the verbatim
-     vm_branch port.
-  2. Differentiability: forward-mode tangents match finite differences for
-     the gs, Tco, pressure-grid, Kzz-profile, and Heng+14 T(P) front-ends.
+  1. The vm expression against the verbatim vm_branch port.
+  2. Differentiability: forward-mode tangents match finite differences for gs
+     and Tco through the hydrostatic column and molecular diffusion, and the
+     Kzz-profile and Heng+14 T(P) front-ends are differentiable.
 """
 
 from __future__ import annotations
@@ -19,19 +16,18 @@ import types
 import jax
 import jax.numpy as jnp
 import numpy as np
+import pytest
 
 from vulcan3 import atm_setup
-from vulcan3.atm_jax import (
-    AtmSpec,
-    PhysicalInputs,
-    build_atm_static,
-    make_physical_inputs,
-    pco_from_endpoints,
+from vulcan3.atm_jax import AtmSpec, PhysicalInputs, _mol_diff, make_physical_inputs
+from vulcan3.atm_setup import (
+    analytical_TP_H14,
+    compute_mean_mass,
+    compute_pico,
+    mu_dz_g_jax,
 )
-from vulcan3.atm_setup import analytical_TP_H14
 from vulcan3.composition import species as _SPECIES
-from vulcan3.jax_step import make_atm_static
-from vulcan3.phy_const import UNDERFLOW_DENOM
+from vulcan3.phy_const import UNDERFLOW_DENOM, kb
 
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 
@@ -49,50 +45,6 @@ def _rel(a, b):
     floor = UNDERFLOW_DENOM + 1e-30 * float(np.abs(b).max())
     denom = np.maximum(np.abs(b), floor)
     return float(np.max(np.abs(a - b) / denom))
-
-
-# 1. Equivalence with the production make_atm_static path.
-
-
-def test_build_atm_static_matches_make_atm_static(hd189_state):
-    """Integrated: every AtmStatic field equals the frozen production build."""
-    from vulcan3.config import default_config
-
-    cfg = default_config()
-
-    var, atm = hd189_state.var, hd189_state.atm
-    nz, ni = np.asarray(var.y).shape
-
-    ref = make_atm_static(atm, ni, nz, cfg=cfg)
-    phys, spec = make_physical_inputs(cfg, var, atm, list(_SPECIES))
-    got = build_atm_static(phys, spec)
-
-    float_fields = (
-        "Kzz",
-        "Dzz",
-        "dzi",
-        "vz",
-        "Hpi",
-        "Ti",
-        "Tco",
-        "g",
-        "ms",
-        "alpha",
-        "M",
-        "vm",
-        "vs",
-        "top_flux",
-        "bot_flux",
-        "bot_vdep",
-    )
-    for f in float_fields:
-        # Machine precision; the height-integration averages (dzi/Hpi) carry a
-        # few ULP of FP-ordering noise, everything else is bit-identical.
-        assert _rel(getattr(got, f), getattr(ref, f)) < RTOL, f
-
-    assert np.array_equal(np.asarray(got.gas_indx_mask), np.asarray(ref.gas_indx_mask))
-    for flag in ("use_vm_mol", "use_settling", "use_topflux", "use_botflux"):
-        assert bool(getattr(got, flag)) == bool(getattr(ref, flag)), flag
 
 
 def _synthetic_mol_diff_setup():
@@ -184,8 +136,6 @@ def test_compute_mol_diff_vm_matches_vm_branch_reference():
 def test_vm_branch_differentiates_wrt_Tco():
     """Forward-mode tangent of the interface vm w.r.t. a Tco scale is finite and
     matches a central difference."""
-    from vulcan3.atm_jax import _mol_diff
-
     species_list, ms_arr, nz, ni, Tco, n_0, g, Hp, dz, alpha = (
         _synthetic_mol_diff_setup()
     )
@@ -202,22 +152,14 @@ def test_vm_branch_differentiates_wrt_Tco():
     spec = AtmSpec(
         nz=nz,
         ni=ni,
-        pref_indx=0,
         atm_base="H2",
         ms=jnp.asarray(ms_arr),
         alpha=jnp.asarray(alpha),
-        gas_indx_mask=jnp.asarray(~nongas),
         nongas_mask=jnp.asarray(nongas),
-        diff_esc_mask=jnp.zeros(ni, dtype=jnp.bool_),
         settle_coeff=jnp.zeros(ni),
-        top_flux=jnp.zeros(ni),
-        bot_flux=jnp.zeros(ni),
-        bot_vdep=jnp.zeros(ni),
         use_moldiff=True,
         use_vm_mol=True,
         use_settling=False,
-        use_topflux=False,
-        use_botflux=False,
     )
     Tco_j = jnp.asarray(Tco)
     n0_j, g_j, Hp_j, dz_j = (jnp.asarray(a) for a in (n_0, g, Hp, dz))
@@ -238,41 +180,32 @@ def test_vm_branch_differentiates_wrt_Tco():
 # 2. Differentiability -- forward-mode tangents vs finite differences.
 
 
-def test_jvp_dz_wrt_gs_matches_fd(hd189_state):
-    """dz responds to surface gravity; jvp matches a central difference."""
+def _column(hd189_state, gs_scale, T_scale):
+    """(M, dzi, Dzz) of the HD189 column through the live on-graph pieces, the
+    hydrostatic integrator and molecular diffusion, at scaled gs and Tco."""
     from vulcan3.config import default_config
 
-    cfg = default_config()
-
-    var, atm = hd189_state.var, hd189_state.atm
-    phys, spec = make_physical_inputs(cfg, var, atm, list(_SPECIES))
-
-    def loss(gs):
-        a = build_atm_static(phys._replace(gs=gs), spec)
-        return jnp.sum(a.dzi)
-
-    gs0 = float(phys.gs)
-    _, tangent = jax.jvp(loss, (jnp.float64(gs0),), (jnp.float64(1.0),))
-    eps = gs0 * 1e-6
-    fd = (loss(jnp.float64(gs0 + eps)) - loss(jnp.float64(gs0 - eps))) / (2 * eps)
-    assert np.isfinite(float(tangent)) and float(tangent) != 0.0
-    assert abs(float(tangent) - float(fd)) / (abs(float(fd)) + UNDERFLOW_DENOM) < FD_RTOL
+    atm = hd189_state.atm
+    phys, spec = make_physical_inputs(default_config(), hd189_state.var, atm,
+                                      list(_SPECIES))
+    Tco = phys.Tco * T_scale
+    M = phys.pco / (kb * Tco)
+    g, Hp, dz, _zco, _zmco, dzi, _Ti, _Hpi = mu_dz_g_jax(
+        int(atm.pref_indx), phys.gs * gs_scale, phys.Rp, Tco,
+        compute_mean_mass(phys.ymix, spec.ms), compute_pico(phys.pco), spec.nz)
+    Dzz, _, _ = _mol_diff(phys._replace(Tco=Tco), spec, M, g, Hp, dz)
+    return M, dzi, Dzz
 
 
-def test_jvp_M_Dzz_wrt_Tco_matches_fd(hd189_state):
-    """Temperature is a differentiable leaf: scaling Tco moves M and Dzz and
-    the jvp matches a central difference."""
-    from vulcan3.config import default_config
+@pytest.mark.parametrize("knob", ["gs", "Tco"])
+def test_column_jvp_matches_fd(hd189_state, knob):
+    """dzi responds to surface gravity; M, Dzz and dzi to temperature. The
+    forward-mode tangent of each unit scale matches a central difference."""
 
-    cfg = default_config()
-
-    var, atm = hd189_state.var, hd189_state.atm
-    phys, spec = make_physical_inputs(cfg, var, atm, list(_SPECIES))
-    Tco0 = phys.Tco
-
-    def loss(scale):
-        a = build_atm_static(phys._replace(Tco=Tco0 * scale), spec)
-        return jnp.sum(a.M) + jnp.sum(a.Dzz) + jnp.sum(a.dzi)
+    def loss(x):
+        if knob == "gs":
+            return jnp.sum(_column(hd189_state, x, 1.0)[1])
+        return sum(jnp.sum(a) for a in _column(hd189_state, 1.0, x))
 
     _, tangent = jax.jvp(loss, (jnp.float64(1.0),), (jnp.float64(1.0),))
     eps = 1e-6
@@ -292,24 +225,6 @@ def test_analytical_TP_front_end_differentiates():
         return jnp.sum(analytical_TP_H14(pco, base.at[1].set(T_irr), gs=2140.0, Pb=1e9))
 
     _, tangent = jax.jvp(tprofile, (jnp.float64(1200.0),), (jnp.float64(1.0),))
-    assert np.isfinite(float(tangent)) and float(tangent) != 0.0
-
-
-# Full-run T sensitivity: examples/grad_physical_example.py.
-
-
-def test_pco_from_endpoints_matches_logspace_and_differentiates():
-    nz = 40
-    P_b, P_t = 1e9, 1e-2
-    got = np.asarray(pco_from_endpoints(jnp.float64(P_b), jnp.float64(P_t), nz))
-    ref = np.logspace(np.log10(P_b), np.log10(P_t), nz)
-    assert _rel(got, ref) < RTOL
-    # dpco/dP_b is finite.
-    tangent = jax.jvp(
-        lambda Pb: jnp.sum(pco_from_endpoints(Pb, jnp.float64(P_t), nz)),
-        (jnp.float64(P_b),),
-        (jnp.float64(1.0),),
-    )[1]
     assert np.isfinite(float(tangent)) and float(tangent) != 0.0
 
 

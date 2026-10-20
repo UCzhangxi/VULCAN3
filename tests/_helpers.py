@@ -196,3 +196,34 @@ def run_child(child_src: str, *, network: str, label: str, timeout: int = 600):
         f"--- stdout ---\n{res.stdout}\n--- stderr ---\n{res.stderr}"
     )
     return res
+
+
+def stack_integ_states(states):
+    """Stack single-profile `JaxIntegState`s (same nz / ni / network) along a
+    leading batch axis."""
+    import jax
+    import jax.numpy as jnp
+
+    return jax.tree_util.tree_map(lambda *xs: jnp.stack(xs, axis=0), *states)
+
+
+def unstack_integ_states(batched, n):
+    """Split a batched `JaxIntegState` into `n` single-profile states."""
+    import jax
+
+    return [jax.tree_util.tree_map(lambda x, i=i: x[i], batched) for i in range(n)]
+
+
+def stack_atm_statics(atms):
+    """Stack single-profile `AtmStatic`s for `run_batch`: the array fields gain
+    a batch axis; the toggle flags stay scalars and must agree."""
+    import jax.numpy as jnp
+    from vulcan3.outer_loop import _ATM_ARRAY_FIELDS
+
+    first = atms[0]
+    flags = [f for f in first._fields if f not in _ATM_ARRAY_FIELDS]
+    assert all(getattr(a, f) == getattr(first, f) for a in atms[1:] for f in flags)
+    return first._replace(**{
+        f: jnp.stack([jnp.asarray(getattr(a, f)) for a in atms], axis=0)
+        for f in _ATM_ARRAY_FIELDS
+    })

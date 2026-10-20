@@ -36,9 +36,7 @@ oracles:
       - tests/test_ros2_step.py
       - tests/test_photo.py
       - tests/test_diffusion.py
-      - tests/test_diffusion_variants.py
       - tests/test_outer_loop_atm_refresh.py
-      - tests/test_rates.py
       - tests/test_default_master_parity.py
       - tests/test_eq_seed.py
 

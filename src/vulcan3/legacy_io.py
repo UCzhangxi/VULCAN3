@@ -22,7 +22,9 @@ import warnings
 from .config import default_config
 from . import chem_funs
 from .chem_funs import ni, nr
-from .state import TERM_NONFINITE, TERM_RUNTIME, TERM_STEP_COUNT
+from . import photo as _photo_mod
+from .op_jax import Ros2JAX
+from .state import TERM_NONFINITE, TERM_RUNTIME, TERM_STEP_COUNT, legacy_view
 
 logger = logging.getLogger(__name__)
 
@@ -158,124 +160,6 @@ def _synthesize_cross_dicts(static) -> dict:
     }
 
 
-def _integrate_J_branch(
-    aflux: np.ndarray,
-    cross_branch: np.ndarray,
-    din12_indx: int,
-    dbin1: float,
-    dbin2: float,
-) -> np.ndarray:
-    """Trapezoidal-rule integral of `aflux * cross` over wavelength bins.
-
-    Mirrors `op.compute_J` (op.py:2771-2780): a midpoint sum on each of the
-    two-resolution sub-grids minus a half-weight correction at the four
-    boundary samples (low-end, split, split-1, high-end). Works for both
-    1-D `cross_branch` of shape (nbin,) and 2-D (nz, nbin): broadcasting
-    handles per-layer T-dependent cross sections transparently.
-    """
-    flo = aflux[:, :din12_indx]
-    fhi = aflux[:, din12_indx:]
-    if cross_branch.ndim == 1:
-        clo = cross_branch[:din12_indx]
-        chi = cross_branch[din12_indx:]
-        c0 = cross_branch[0]
-        c_split_minus = cross_branch[din12_indx - 1]
-        c_split_plus = cross_branch[din12_indx]
-        c_end = cross_branch[-1]
-    else:
-        clo = cross_branch[:, :din12_indx]
-        chi = cross_branch[:, din12_indx:]
-        c0 = cross_branch[:, 0]
-        c_split_minus = cross_branch[:, din12_indx - 1]
-        c_split_plus = cross_branch[:, din12_indx]
-        c_end = cross_branch[:, -1]
-
-    j = np.sum(flo * clo, axis=1) * dbin1
-    j -= 0.5 * (aflux[:, 0] * c0 + aflux[:, din12_indx - 1] * c_split_minus) * dbin1
-    j += np.sum(fhi * chi, axis=1) * dbin2
-    j -= 0.5 * (aflux[:, din12_indx] * c_split_plus + aflux[:, -1] * c_end) * dbin2
-    return j
-
-
-def _synthesize_J_sp_dict(
-    runstate,
-    branch_count,
-    species_iter,
-    branch_keys,
-    cross_J,
-    branch_T_keys,
-    cross_J_T,
-    T_cross_sp,
-):
-    """Reconstruct the legacy `{(sp, branch): array(nz)}` J-rate dict
-    from cross sections times actinic flux, matching `op.compute_J`.
-
-    Master writes `var.J_sp[(sp, nbr)]` for ALL branches in `n_branch[sp]`
-    (op.py:2764) and only skips writing `var.k[idx]` for branches whose
-    `pho_rate_index` is in `cfg.remove_list` (op.py:2785). Reading J from
-    `runstate.rate.k` therefore loses the J-rate for any removed branch.
-    We integrate `aflux * cross` directly so removed branches still report
-    their true photolysis rate, as master's writer does.
-
-    Branch 0 is the across-branch sum (op.py:2783).
-
-    Args:
-        runstate:       populated RunState; needs `photo_runtime.aflux`
-                        and `photo_static.{dbin1, dbin2, din12_indx}`.
-        branch_count:   `{sp: n_branch}` mapping (max branch number per sp).
-        species_iter:   iterable of species names (photo_sp / ion_sp).
-        branch_keys:    tuple of `(sp, br)` for non-T cross_J rows.
-        cross_J:        (n_br, nbin) cross sections per branch.
-        branch_T_keys:  tuple of `(sp, br)` for T-dep cross_J_T rows.
-        cross_J_T:      (n_br_T, nz, nbin) per-layer T-dep cross sections.
-        T_cross_sp:     species using cross_J_T (per cfg.T_cross_sp).
-
-    Returns:
-        `{(sp, branch): np.ndarray(nz)}` matching master's schema.
-    """
-    pr = runstate.photo_runtime
-    static = runstate.photo_static
-    if pr is None or static is None:
-        return {}
-    aflux = np.asarray(pr.aflux, dtype=np.float64)
-    nz = aflux.shape[0]
-    din12_indx = int(static.din12_indx)
-    dbin1 = float(static.dbin1)
-    dbin2 = float(static.dbin2)
-
-    # Lookup tables: (sp, br) -> cross row index.
-    nonT_index = {key: i for i, key in enumerate(branch_keys)}
-    T_index = {key: i for i, key in enumerate(branch_T_keys)}
-    T_cross_set = set(T_cross_sp)
-
-    out: dict = {}
-    for sp in species_iter:
-        nbr_max = int(branch_count.get(sp, 0))
-        for br in range(1, nbr_max + 1):
-            if sp in T_cross_set and (sp, br) in T_index:
-                cross_row = np.asarray(cross_J_T[T_index[(sp, br)]], dtype=np.float64)
-            elif (sp, br) in nonT_index:
-                cross_row = np.asarray(cross_J[nonT_index[(sp, br)]], dtype=np.float64)
-            else:
-                # No cross section table for this branch (e.g. ion-only
-                # species in pho_rate_index, or vice versa).
-                out[(sp, br)] = np.zeros(nz, dtype=np.float64)
-                continue
-            out[(sp, br)] = _integrate_J_branch(
-                aflux,
-                cross_row,
-                din12_indx,
-                dbin1,
-                dbin2,
-            )
-        # Branch 0 = sum across branches 1..nbr_max (op.py:2783).
-        if nbr_max > 0:
-            out[(sp, 0)] = sum(out[(sp, br)] for br in range(1, nbr_max + 1))
-        else:
-            out[(sp, 0)] = np.zeros(nz, dtype=np.float64)
-    return out
-
-
 def _synthesize_save_dicts(runstate, cfg):
     """Build the three .vul top-level dicts from a `RunState`.
 
@@ -286,152 +170,54 @@ def _synthesize_save_dicts(runstate, cfg):
     """
     use_photo = bool(cfg.use_photo)
     use_ion = bool(cfg.use_ion)
-    use_save_evo = bool(cfg.save_evolution)
-    T_cross_sp = list(cfg.T_cross_sp)
+    var, atm, para = legacy_view(runstate)
 
-    # 1. Variable dict: mirrors upstream's var.var_save filter (store.py:83-88).
+    # 1. Variable dict: upstream's var.var_save filter (store.py:83-88).
+    keys = ["y", "ymix", "t", "dt", "longdy", "longdydt", "y_ini", "atom_ini",
+            "atom_sum", "atom_loss", "atom_conden", "Rf"]
+    if use_photo:
+        keys += ["tau", "sflux", "aflux", "aflux_change", "nbin", "bins",
+                 "dbin1", "dbin2", "n_branch"]
+    if use_ion:
+        keys += ["charge_list", "ion_sp", "ion_branch", "ion_br_ratio"]
     var_save = {"species": species, "nr": nr}
+    var_save.update({k: getattr(var, k) for k in keys if hasattr(var, k)})
+    var_save["k"] = {i: var.k_arr[i].copy() for i in range(1, var.k_arr.shape[0])}
 
-    # Rate dict from the dense (nr+1, nz) array.
-    k_arr = np.asarray(runstate.rate.k, dtype=np.float64)
-    var_save["k"] = {i: k_arr[i].copy() for i in range(1, k_arr.shape[0])}
-
-    # Step slice.
-    if runstate.step is not None:
-        var_save["y"] = np.asarray(runstate.step.y, dtype=np.float64)
-        var_save["ymix"] = np.asarray(runstate.step.ymix, dtype=np.float64)
-        var_save["t"] = float(runstate.step.t)
-        var_save["dt"] = float(runstate.step.dt)
-        var_save["longdy"] = float(runstate.step.longdy)
-        var_save["longdydt"] = float(runstate.step.longdydt)
-    # Initial-state snapshot (taken at ini_y; metadata.y_ini holds the
-    # canonical reference even after the runner mutates `step.y`).
-    if runstate.metadata is not None:
-        var_save["y_ini"] = np.asarray(runstate.metadata.y_ini, dtype=np.float64)
-
-    # Atom dicts from the typed atom slot.
-    if runstate.atoms is not None:
-        a = runstate.atoms
-        ai = np.asarray(a.atom_ini)
-        al = np.asarray(a.atom_loss)
-        as_ = np.asarray(a.atom_sum)
-        var_save["atom_ini"] = {sp: float(ai[i]) for i, sp in enumerate(a.atom_order)}
-        var_save["atom_sum"] = {sp: float(as_[i]) for i, sp in enumerate(a.atom_order)}
-        var_save["atom_loss"] = {sp: float(al[i]) for i, sp in enumerate(a.atom_order)}
-        # The runner does not track atom_conden; zeros keep the .vul schema.
-        var_save["atom_conden"] = {sp: 0.0 for sp in a.atom_order}
-
-    # Photo runtime (when use_photo).
-    if use_photo and runstate.photo_runtime is not None:
-        pr = runstate.photo_runtime
-        var_save["tau"] = np.asarray(pr.tau, dtype=np.float64)
-        var_save["sflux"] = np.asarray(pr.sflux, dtype=np.float64)
-        var_save["aflux"] = np.asarray(pr.aflux, dtype=np.float64)
-        var_save["aflux_change"] = float(pr.aflux_change)
-
-    # Photo cross-section dicts.
     static = runstate.photo_static
     if use_photo and static is not None:
         photo_dicts = _synthesize_cross_dicts(static)
         var_save["cross"] = photo_dicts["cross"]
         var_save["cross_scat"] = photo_dicts["cross_scat"]
         var_save["cross_J"] = photo_dicts["cross_J"]
-        if T_cross_sp:
+        if list(cfg.T_cross_sp):
             var_save["cross_T"] = photo_dicts["cross_T"]
         if use_ion:
             var_save["cross_Jion"] = photo_dicts["cross_Jion"]
-        # Bin grid.
-        var_save["nbin"] = int(static.nbin)
-        var_save["bins"] = np.asarray(static.bins, dtype=np.float64)
-        var_save["dbin1"] = float(static.dbin1)
-        var_save["dbin2"] = float(static.dbin2)
-
-    # Metadata (Rf, n_branch, photo_sp, ion_sp, charge_list, ...).
-    md = runstate.metadata
-    if md is not None:
-        var_save["Rf"] = dict(md.Rf)
-        if use_photo:
-            var_save["n_branch"] = dict(md.n_branch)
-            var_save["J_sp"] = _synthesize_J_sp_dict(
-                runstate,
-                md.n_branch,
-                md.photo_sp,
-                static.branch_keys,
-                static.cross_J,
-                static.branch_T_keys,
-                static.cross_J_T,
-                T_cross_sp,
-            )
-        if use_ion:
-            var_save["charge_list"] = list(md.charge_list)
-            var_save["ion_sp"] = set(md.ion_sp)
-            var_save["ion_wavelen"] = {}
-            var_save["ion_branch"] = dict(md.ion_branch)
-            var_save["ion_br_ratio"] = dict(md.ion_br_ratio)
-            # Ion branches are non-T-dep; pass empty T tables.
-            var_save["Jion_sp"] = _synthesize_J_sp_dict(
-                runstate,
-                md.ion_branch,
-                md.ion_sp,
-                static.ion_branch_keys,
-                static.cross_Jion,
-                tuple(),
-                np.zeros((0, 0, 0), dtype=np.float64),
-                tuple(),
-            )
+        # Master writes J for every branch, removed ones included (op.py:2764,
+        # 2785); an empty rate index makes `_fill_J` leave k_arr alone.
+        if hasattr(var, "aflux"):
+            var_save["J_sp"] = Ros2JAX._fill_J(
+                var, _photo_mod.photo_J_data_from_static(static), var.photo_sp,
+                var.n_branch, {})
+            if use_ion:
+                var_save["Jion_sp"] = Ros2JAX._fill_J(
+                    var, _photo_mod.photo_ion_data_from_static(static),
+                    var.ion_sp, var.ion_branch, {})
+    if use_ion:
+        var_save["ion_wavelen"] = {}
 
     # Evolution buffer under the legacy y_time / t_time keys.
-    if use_save_evo and runstate.step is not None:
+    if bool(cfg.save_evolution) and runstate.step is not None:
         var_save["y_time"] = np.asarray(runstate.step.y_evo, dtype=np.float64)
         var_save["t_time"] = np.asarray(runstate.step.t_evo, dtype=np.float64)
 
-    # 2. Atm dict: mirrors `vars(data_atm)`.
-    atm_save = {}
-    a_in = runstate.atm
-    for f in a_in._fields:
-        atm_save[f] = np.asarray(getattr(a_in, f))
-    if md is not None:
-        atm_save["Ti"] = np.asarray(md.Ti)
-        atm_save["gas_indx"] = list(md.gas_indx)
-        atm_save["pref_indx"] = int(md.pref_indx)
-        atm_save["gs"] = float(md.gs)
-        atm_save["sat_p"] = dict(md.sat_p)
-        atm_save["sat_mix"] = dict(md.sat_mix)
-        atm_save["r_p"] = dict(md.r_p)
-        atm_save["rho_p"] = dict(md.rho_p)
-        atm_save["fix_sp_indx"] = dict(md.fix_sp_indx)
-    atm_save["conden_min_lev"] = {}
-
-    # 3. Parameter dict: mirrors `vars(data_para)` of upstream store.Parameters (store.py:182).
-    para_save = {}
-    if runstate.params is not None:
-        p = runstate.params
-        para_save["count"] = int(p.count)
-        para_save["nega_count"] = int(p.nega_count)
-        para_save["loss_count"] = int(p.loss_count)
-        para_save["delta_count"] = int(p.delta_count)
-        para_save["delta"] = float(p.delta)
-        para_save["small_y"] = float(p.small_y)
-        para_save["nega_y"] = float(p.nega_y)
-        para_save["end_case"] = int(p.end_case)
-        # VULCAN3 addition: the runner's termination code, finer than
-        # end_case (end_case 5 does not say why the run stopped).
-        para_save["termination_reason"] = int(p.termination_reason)
-        para_save["solver_str"] = "solver"
-        para_save["switch_final_photo_frq"] = bool(p.switch_final_photo_frq)
-        para_save["where_varies_most"] = np.asarray(
-            p.where_varies_most, dtype=np.float64
-        )
-        para_save["pic_count"] = int(p.pic_count)
-        para_save["fix_species_start"] = bool(p.fix_species_start)
-    # Plotting-only master field, kept so the public .vul schema matches.
-    para_save["tableau20"] = [
+    # 2-3. `vars(data_atm)` and `vars(data_para)` (store.py:182); solver_str
+    # and the plotting-only tableau20 keep the public .vul schema.
+    para_save = dict(vars(para), solver_str="solver", tableau20=[
         (r / 255.0, g / 255.0, b / 255.0) for r, g, b in _TABLEAU20_RGB255
-    ]
-    if md is not None:
-        para_save["start_time"] = float(md.start_time)
-
-    return var_save, atm_save, para_save
+    ])
+    return var_save, dict(vars(atm)), para_save
 
 
 class Output(object):

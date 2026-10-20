@@ -1,50 +1,16 @@
 """Breadth coverage of config flags not exercised by the per-flag tests.
 
 Each case targets one flag (or a small group), runs the relevant pre-loop
-setup or a short integration, and asserts something useful about the state.
-Short integrations cap at <= 20 Ros2 steps to stay under the 30 s/test
-budget. Per-case detail lives in each test's docstring.
+setup, and asserts something useful about the state. Per-case detail lives in
+each test's docstring.
 """
 
 from __future__ import annotations
-
-import os
-import warnings
-from pathlib import Path
 
 import numpy as np
 import pytest
 from _helpers import load_tpk_state, set_cfg
 
-ROOT = Path(__file__).resolve().parent.parent
-os.chdir(ROOT)
-
-warnings.filterwarnings("ignore")
-
-
-def _run_full_state(count_max: int = 5):
-    """Build the HD189 pre-loop RunState with `count_max` overridden for a
-    short smoke run, and integrate it. Returns `(rs, rs_out)`.
-
-    Sets count_max / count_min / use_print_prog on the process default
-    config (conftest restores it).
-    """
-    from vulcan3.config import default_config
-
-    vulcan_cfg = default_config()
-
-    vulcan_cfg.count_max = count_max
-    vulcan_cfg.count_min = 1
-    vulcan_cfg.use_print_prog = False
-
-    import vulcan3.legacy_io as op
-    import vulcan3.op_jax as op_jax
-    import vulcan3.outer_loop as outer_loop
-    from vulcan3.state import RunState
-
-    rs = RunState.with_pre_loop_setup(vulcan_cfg)
-    rs_out = outer_loop.OuterLoop(op_jax.Ros2JAX(), op.Output())(rs)
-    return rs, rs_out
 
 
 def test_T_cross_sp_path_finite_positive():
@@ -132,23 +98,3 @@ def test_bc_flux_loaded_from_file(flag, file_attr, file_path, target_sp):
         f"expected nonzero {arr_name} for {target_sp} from {file_path}"
     )
     assert np.any(arr != 0.0)
-
-
-def test_use_fix_all_bot_keeps_bottom_at_eq_mix():
-    """``use_fix_all_bot=True`` keeps the bottom layer at chemical-EQ mixing
-    ratios (not just absolute density) across a short integration.
-    """
-    set_cfg(use_fix_all_bot=True)
-    rs, rs_out = _run_full_state(count_max=10)
-    bottom_ymix_pre = np.asarray(rs.step.ymix[0], dtype=np.float64)
-    n0_bot = float(rs.atm.n_0[0])
-
-    y_bot_post = np.asarray(rs_out.step.y[0], dtype=np.float64)
-    target = bottom_ymix_pre * n0_bot
-    max_relerr = float(
-        np.max(np.abs(y_bot_post - target) / np.maximum(np.abs(target), 1e-300))
-    )
-    # The pin is a copy, so the bar is machine precision.
-    assert max_relerr < 1e-12, (
-        f"bottom-row drift exceeds tolerance: max relerr = {max_relerr:.3e}"
-    )

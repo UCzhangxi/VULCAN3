@@ -226,9 +226,9 @@ class BodyTerms(NamedTuple):
     switch the hydrostatic rebalance to the runner's gas-only-denominator,
     non-gas-passthrough form. `fix_mask`/`fix_y` reproduce the fix_species
     regime (pinned rows become constants of the map). `bot_idx`/`bot_val` are
-    the layer-0 Dirichlet pins, all applied after the balance. The runner
-    applies only `use_fix_all_bot` there; it sets `use_fix_sp_bot` and the
-    H2/He pin on the step output, before the clip and the balance.
+    the layer-0 Dirichlet pins, applied after the balance; the runner sets
+    `use_fix_sp_bot` and the H2/He pin on the step output, before the clip and
+    the balance.
     """
 
     conden_static: Optional[CondenStatic] = None
@@ -1114,8 +1114,7 @@ def make_body_terms(integ, converged_state, atm_static):
       for how tight the state actually is.
     * fix_species regime (`fix_species_started`): pin mask + pinned values
       from the carry -- the regime real converged conden runs end in.
-    * layer-0 pins: `use_fix_all_bot`, `use_fix_sp_bot`, and the hycean H2/He
-      pin once tripped.
+    * layer-0 pins: `use_fix_sp_bot` and the hycean H2/He pin once tripped.
     * gas-only / partial hydrostatic balance (condensate-aware form).
 
     Raises NotImplementedError for `use_ion`; warns when `diff_esc` is active
@@ -1146,33 +1145,13 @@ def make_body_terms(integ, converged_state, atm_static):
             "not supported. Use forward-mode."
         )
 
-    # --- atm splice (the converged refresh geometry + live vm) ---
-    atm_step = atm_static._replace(
-        g=s.g, dzi=s.dzi, Hpi=s.Hpi, top_flux=s.top_flux, vs=s.vs
-    )
-    if bool(st.use_vm_mol):
-        from . import atm_refresh as _ar  # lazy: keep the module acyclic
+    # --- the runner's own atm splice: converged geometry, live vm, and the
+    # hybrid vm_mol phase it converged on (a hybrid run ends in phase 1) ---
+    from .outer_loop import _splice_conden, _splice_step_atm  # lazy: acyclic
 
-        atm_step = atm_step._replace(
-            vm=_ar.recompute_vm_jax(
-                s.g,
-                s.Hpi,
-                s.dzi,
-                atm_static.Dzz,
-                atm_static.ms,
-                atm_static.alpha,
-                atm_static.Tco,
-                integ._refresh_static.kb,
-                integ._refresh_static.Navo,
-            )
-        )
-    # Hybrid molecular diffusion: linearize the same operator the runner
-    # converged on -- a hybrid run finishes in phase 1 (central diff,
-    # hybrid_use_vm==0.0), so drive use_vm_mol from the converged carry
-    # as body_fn does (no-op for non-hybrid runs).
-    atm_step = atm_step._replace(
-        use_vm_mol=jnp.asarray(s.hybrid_use_vm, dtype=jnp.float64)
-    )
+    atm_step = _splice_step_atm(atm_static, s, bool(st.use_vm_mol),
+                                integ._refresh_static.kb,
+                                integ._refresh_static.Navo)
 
     if int(np.asarray(integ._refresh_static.diff_esc_idx).size) > 0:
         warnings.warn(
@@ -1199,30 +1178,17 @@ def make_body_terms(integ, converged_state, atm_static):
             fix_y = s.fix_y
         elif float(np.asarray(s.t)) >= float(cfg.start_conden_time):
             # In-window: _make_conden_branch's per-lane splice.
-            conden_static = cs._replace(
-                Dg_per_re=s.pv.c_Dg_per_re,
-                sat_n_per_re=s.pv.c_sat_n_per_re,
-                h2o_Dg=s.pv.c_h2o_Dg,
-                h2o_sat=s.pv.c_h2o_sat,
-                nh3_Dg=s.pv.c_nh3_Dg,
-                nh3_sat=s.pv.c_nh3_sat,
-                nh3_conden_top=s.pv.c_nh3_conden_top,
-                n_0=s.pv.n_0,
-            )
+            conden_static = _splice_conden(cs, s.pv)
 
     gas_mask = cs.gas_indx_mask if cs is not None else None
     if gas_mask is not None and bool(jnp.all(gas_mask)):
         gas_mask = None  # all-gas network: plain renorm denominator
 
-    # --- layer-0 Dirichlet pins (all set after the balance here; the runner
-    # sets fix_sp_bot and H2/He before the clip, fix_all_bot after it) ---
-    ni = s.y.shape[1]
+    # --- layer-0 Dirichlet pins (set after the balance here; the runner
+    # sets them before the clip) ---
     n0_bot = s.pv.n_0[0]
     idx_parts = []
     val_parts = []
-    if bool(st.use_fix_all_bot):
-        idx_parts.append(jnp.arange(ni, dtype=jnp.int32))
-        val_parts.append(s.pv.bottom_n)
     if bool(st.use_fix_sp_bot) and int(np.asarray(st.fix_sp_bot_idx).size) > 0:
         idx_parts.append(st.fix_sp_bot_idx.astype(jnp.int32))
         val_parts.append(st.fix_sp_bot_mix * n0_bot)
@@ -1261,10 +1227,9 @@ def _adjoint_scope_findings(
     body map for this configuration, and what that does to the gradient.
 
     Severity: "error" = a dropped process is active at the fixed point, so
-    sensitivities touching it are physically wrong; "warning" = a known
-    leading-order-only omission; "info" = second-order truncation or a
-    diagnostic to watch. Pure host logic (unit-testable without arrays);
-    `audit_adjoint_scope` adds the empirical per-cell defect scan on top.
+    sensitivities touching it are wrong; "warning" = a leading-order-only
+    omission; "info" = a second-order truncation or a diagnostic to watch.
+    Pure host logic; `audit_adjoint_scope` adds the per-cell defect scan.
     """
     findings: list = []
 
@@ -1280,17 +1245,11 @@ def _adjoint_scope_findings(
         val = getattr(final_state, name, None)
         return None if val is None else bool(np.asarray(val))
 
+    pass_terms = "Pass body_terms from make_body_terms(integ, final, atm_static)."
     if bool(flag("use_ion", False)):
-        add(
-            "ion_charge_balance",
-            "error",
-            "use_ion=True: the runner pins the electron rows inside both Ros2 "
-            "stages and applies the post-step charge balance e = -y.charge "
-            "(outer_loop body_fn); neither is in the adjoint body map, so "
-            "y_star is not a fixed point on the electron/ion rows and "
-            "ion-coupled sensitivities are wrong. Not supported; use "
-            "forward-mode for ion columns.",
-        )
+        add("ion_charge_balance", "error",
+            "use_ion=True: the electron-row pin and the post-step charge "
+            "balance are not in the body map; use forward mode for ion columns.")
 
     terms_conden = body_terms is not None and body_terms.conden_static is not None
     terms_fix = body_terms is not None and body_terms.fix_mask is not None
@@ -1299,165 +1258,81 @@ def _adjoint_scope_findings(
     if bool(flag("use_condense", False)):
         started = state_bool("fix_species_started")
         if terms_conden or (started and terms_fix):
-            add(
-                "condensation",
-                "info",
-                "use_condense=True and body_terms carries the matching "
-                "regime (conden rate-recompute + relax kernels + partial "
-                "balance in the window, or the fix_species pins after it). "
-                "Residual limitation: the saturation tables are T-baked "
-                "constants, so T-input gradients miss d(sat)/dT.",
-            )
+            add("condensation", "info",
+                "condensation is carried by body_terms; the saturation tables "
+                "are T-baked, so T-input gradients miss d(sat)/dT.")
         else:
-            add(
-                "condensation",
-                "error",
-                "use_condense=True: in-loop condensation is not in the adjoint "
-                "body map. (1) update_conden_rates rewrites the conden/evap "
-                "k-rows from y every accepted step (a dk/dy feedback exactly "
-                "analogous to photolysis dJ/dy), but the adjoint freezes k_arr; "
-                "(2) the H2O/NH3 relax kernels move mass outside the Ros2 step; "
-                "(3) the runner's hydrostatic rebalance uses a gas-only ymix "
-                "denominator and skips non-gas species (hydro_partial), while "
-                "the adjoint's renorm rescales ALL species by the total sum. "
-                "Pass body_terms from make_body_terms(integ, converged_state, "
-                "atm_static).",
-            )
+            add("condensation", "error",
+                "use_condense=True: the conden k-row recompute, the relax "
+                "kernels and the gas-only hydrostatic balance are not in the "
+                "body map. " + pass_terms)
         if started and not terms_fix:
-            add(
-                "fix_species_pins",
-                "error",
-                "fix_species is ACTIVE at this converged state "
-                "(fix_species_started=True): condensables are pinned via "
-                "fix_mask inside the Ros2 step, but the adjoint's step has "
-                "no fix_mask, so pinned rows are treated as free chemistry. "
-                "make_body_terms packs the pins automatically.",
-            )
+            add("fix_species_pins", "error",
+                "fix_species is active at this state (fix_species_started) but "
+                "the body map has no fix_mask. " + pass_terms)
         elif (
             started is None
             and not terms_fix
             and not terms_conden
             and len(list(flag("fix_species", []) or [])) > 0
         ):
-            add(
-                "fix_species_pins",
-                "error",
-                "cfg.fix_species is non-empty: after stop_conden_time the "
-                "runner pins these species via fix_mask inside the Ros2 "
-                "step; the adjoint's step has no fix_mask. Pass the "
-                "converged state to check whether the pin is active.",
-            )
+            add("fix_species_pins", "error",
+                "cfg.fix_species is non-empty and the body map has no fix_mask; "
+                "pass the converged state to check whether the pin is active.")
 
-    bot_pins = (
-        bool(flag("use_fix_all_bot", False))
-        or len(dict(flag("use_fix_sp_bot", {}) or {})) > 0
-    )
+    bot_pins = len(dict(flag("use_fix_sp_bot", {}) or {})) > 0
     if bot_pins:
         if terms_bot:
-            add(
-                "bottom_boundary_pins",
-                "info",
-                "bottom-layer Dirichlet pins are carried by body_terms "
-                "(constant rows of the body map).",
-            )
+            add("bottom_boundary_pins", "info",
+                "the bottom-layer pins are carried by body_terms.")
         else:
-            add(
-                "bottom_boundary_pins",
-                "error",
-                "use_fix_all_bot / use_fix_sp_bot: the runner Dirichlet-pins "
-                "bottom-layer species after the hydrostatic balance; the pin is "
-                "not in the adjoint map, so bottom-row sensitivities for pinned "
-                "species are wrong. NOTE the global fp_err (max-norm relative to "
-                "max|y*|) can read ~1e-9 while a pinned trace row is 100% off; "
-                "trust the per-cell defect scan, not fp_err, here. "
-                "make_body_terms packs the pins automatically.",
-            )
+            add("bottom_boundary_pins", "error",
+                "use_fix_sp_bot: the bottom-layer pin is not in the body map, so "
+                "pinned bottom rows are wrong while the global fp_err can read "
+                "~1e-9; trust the per-cell defect scan. " + pass_terms)
 
     if bool(flag("use_fix_H2He", False)):
         pinned = state_bool("h2he_pinned")
         if pinned and terms_bot:
-            add(
-                "hycean_h2he_pin",
-                "info",
-                "the tripped hycean H2/He bottom pin is carried by body_terms.",
-            )
+            add("hycean_h2he_pin", "info",
+                "the tripped H2/He bottom pin is carried by body_terms.")
         elif pinned is False:
-            add(
-                "hycean_h2he_pin",
-                "warning",
-                "use_fix_H2He=True but the H2/He bottom pin had not yet "
-                "tripped at this state (t <= hycean_pin_time). It is not in "
-                "the adjoint map; once it trips the bottom H2/He rows are "
-                "pinned and their sensitivities become wrong.",
-            )
+            add("hycean_h2he_pin", "warning",
+                "the H2/He bottom pin has not tripped yet (t <= hycean_pin_time); "
+                "once it trips, the bottom H2/He rows are wrong.")
         else:
-            add(
-                "hycean_h2he_pin",
-                "error",
-                "use_fix_H2He=True: the hycean H2/He bottom-layer pin is not "
-                "in the adjoint body map; bottom H2/He (and everything "
-                "buffered by them) sensitivities are wrong. make_body_terms "
-                "packs the pin once it has tripped.",
-            )
+            add("hycean_h2he_pin", "error",
+                "use_fix_H2He=True: the H2/He bottom pin is not in the body map. "
+                + pass_terms)
 
     if bool(flag("use_photo", False)):
         if photo_recompute_k is None:
-            add(
-                "photolysis_feedback",
-                "error",
-                "use_photo=True with photo_recompute_k=None: the adjoint "
-                "would hold J frozen at its converged value (dJ/dy omitted, "
-                "11% on W39b OH+H2). Pass photo_recompute_k = "
-                "make_photo_recompute_k(integ._photo_static, converged_state).",
-            )
+            add("photolysis_feedback", "error",
+                "use_photo=True with photo_recompute_k=None freezes J (dJ/dy "
+                "omitted, 11% on W39b OH+H2). Pass make_photo_recompute_k("
+                "integ._photo_static, final).")
         else:
-            add(
-                "photo_dflux_recursion",
-                "info",
-                "photo_recompute_k carries dJ/dy, but dflux_u (the two-stream "
-                "upward-flux self-recursion) is held at its converged value "
-                "inside the recompute: a second-order truncation.",
-            )
+            add("photo_dflux_recursion", "info",
+                "dflux_u is held at its converged value inside the photo "
+                "recompute (second order).")
 
     if len(list(flag("diff_esc", []) or [])) > 0:
-        add(
-            "escape_flux_feedback",
-            "warning",
-            "diff_esc is non-empty: the runner recomputes the diffusion-"
-            "limited escape flux from the top-layer densities at refresh "
-            "cadence (update_phi_esc); the adjoint freezes top_flux, so the "
-            "d(phi_esc)/dy feedback is dropped. TOA-sensitive losses are "
-            "biased.",
-        )
+        add("escape_flux_feedback", "warning",
+            "diff_esc: top_flux is frozen, so d(phi_esc)/dy is dropped and "
+            "TOA-sensitive losses are biased.")
 
     if bool(flag("use_vm_mol", False)) and not bool(flag("use_hybrid_vm_mol", False)):
-        add(
-            "vm_mol_feedback",
-            "warning",
-            "use_vm_mol=True: the runner refreshes vm(mu(y)) every step via "
-            "recompute_vm_jax; the adjoint uses the frozen converged vm, "
-            "dropping the d(vm)/dy feedback. Matters where molecular "
-            "diffusion dominates (low-Kzz upper atmospheres).",
-        )
+        add("vm_mol_feedback", "warning",
+            "use_vm_mol=True: vm is frozen at its converged value, dropping "
+            "d(vm)/dy (matters at low Kzz).")
     elif bool(flag("use_vm_mol", False)) and bool(flag("use_hybrid_vm_mol", False)):
-        add(
-            "vm_mol_hybrid",
-            "info",
-            "use_hybrid_vm_mol=True: the run converges on the central-"
-            "difference operator (phase 1), so the converged state carries "
-            "hybrid_use_vm=0 and the adjoint linearizes central diff; there "
-            "is no upwind d(vm)/dy feedback to drop.",
-        )
+        add("vm_mol_hybrid", "info",
+            "use_hybrid_vm_mol=True: the run ends on the central operator "
+            "(hybrid_use_vm=0), so there is no d(vm)/dy to drop.")
 
-    add(
-        "atm_refresh_feedback",
-        "info",
-        "The composition->mu->(g, dz, Hp, Hpi) atm-refresh feedback "
-        "(update_frq cadence, always on in the runner) is not in dG/dy; the "
-        "adjoint uses the frozen converged geometry. Second-order for "
-        "H2-dominated columns; the FD validation totals (0.1-0.7% on "
-        "HD189/W39b) already include it.",
-    )
+    add("atm_refresh_feedback", "info",
+        "the mu -> (g, dz, Hp, Hpi) refresh feedback is not in dG/dy (second "
+        "order; included in the 0.1-0.7% FD totals on HD189/W39b).")
 
     if (
         bool(flag("use_topflux", False))
@@ -1465,14 +1340,9 @@ def _adjoint_scope_findings(
         or bot_pins
         or len(list(flag("diff_esc", []) or [])) > 0
     ):
-        add(
-            "open_boundary_deflation",
-            "info",
-            "Open/pinned boundaries break exact column atom conservation, so "
-            "a deflated conserved-mass direction may not be a true null "
-            "direction; check info['null_quality'] from the sensitivity "
-            "call (O(1) means the deflation is corrupting the solve).",
-        )
+        add("open_boundary_deflation", "info",
+            "open or pinned boundaries break column atom conservation; check "
+            "info['null_quality'] (O(1) means the deflation corrupts the solve).")
 
     return findings
 

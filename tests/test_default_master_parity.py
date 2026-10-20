@@ -35,13 +35,28 @@ MATCHED_CASES = [
     (19, 100, [], 5.0e-9, 0.0),
     (199, 5, ["H"], 1.0e-6, 1.0e-10),
 ]
+# Master-only knobs (not in JAX's default.yaml) are off so master stays quiet.
+MASTER_ONLY = {
+    "use_print_delta": False,
+    "use_live_plot": False,
+    "use_live_flux": False,
+    "use_plot_end": False,
+    "use_plot_evo": False,
+    "use_save_movie": False,
+    "use_flux_movie": False,
+    "plot_TP": False,
+}
+# The pinned VULCAN 2 oracle has no refreshed-interface vm and no hybrid flip
+# (which extends the budget past count_max), so both are off.
+JAX_ONLY = {
+    "use_vm_mol": False, "use_hybrid_vm_mol": False, "high_temp_cut": False,
+}
 
 
 _MASTER_SCRIPT = r"""
 from __future__ import annotations
 
 import os
-import subprocess
 import sys
 import time
 from pathlib import Path
@@ -50,69 +65,15 @@ import numpy as np
 
 master_root = Path(sys.argv[1])
 out_npz = Path(sys.argv[2])
-count_max = int(sys.argv[3])
-update_frq = int(sys.argv[4])
-diff_esc = [sp for sp in sys.argv[5].split(",") if sp]
 
 
 def run() -> None:
-    cfg_src = master_root / "cfg_examples" / "vulcan_cfg_HD189.py"
-    cfg_text = cfg_src.read_text()
-    overrides = (
-        "\n# === default parity test overrides ===\n"
-        f"count_max = {count_max}\n"
-        f"count_min = {count_max + 1}\n"
-        "trun_min = 1e22\n"
-        "use_print_prog = False\n"
-        "use_print_delta = False\n"
-        "use_live_plot = False\n"
-        "use_live_flux = False\n"
-        "use_plot_end = False\n"
-        "use_plot_evo = False\n"
-        "use_save_movie = False\n"
-        "use_flux_movie = False\n"
-        "save_evolution = False\n"
-        "plot_TP = False\n"
-        "use_adapt_rtol = False\n"
-        f"update_frq = {update_frq}\n"
-        f"diff_esc = {diff_esc!r}\n"
-    )
-    (master_root / "vulcan_cfg.py").write_text(cfg_text + overrides)
-
-    res = subprocess.run(
-        [sys.executable, "make_chem_funs.py"],
-        cwd=str(master_root),
-        capture_output=True,
-        text=True,
-        timeout=600,
-    )
-    # make_chem_funs.py writes chem_funs.py before its check_conserv(), which
-    # raises under numpy>=1.24; master's vulcan.py ignores that exit code, so
-    # only the module's importability matters.
-    if res.returncode != 0:
-        probe = subprocess.run(
-            [
-                sys.executable,
-                "-c",
-                "import chem_funs as c; "
-                "assert getattr(c, 'ni', 0) > 0 and getattr(c, 'nr', 0) > 0",
-            ],
-            cwd=str(master_root),
-            capture_output=True,
-            text=True,
-            timeout=120,
-        )
-        if probe.returncode != 0:
-            print(res.stdout[-2000:])
-            print(res.stderr[-2000:])
-            sys.exit(res.returncode)
-
     os.chdir(master_root)
     sys.path.insert(0, str(master_root))
 
-    # Master's OWN codegen and the cfg this script just wrote: importing
-    # the port here would make the saved species list and the pre-loop
-    # branches below read the side under test.
+    # Master's OWN codegen and the cfg the parent wrote: importing the port
+    # here would make the saved species list and the pre-loop branches below
+    # read the side under test.
     import build_atm
     import chem_funs
     import op
@@ -178,6 +139,8 @@ def run() -> None:
         dt=np.float64(data_var.dt),
         longdy=np.float64(data_var.longdy),
         count=np.int64(data_para.count),
+        rejections=np.array([data_para.nega_count, data_para.loss_count,
+                             data_para.delta_count], dtype=np.int64),
         atom_loss_keys=np.array(list(data_var.atom_loss.keys()), dtype=object),
         atom_loss_vals=np.array(
             [float(v) for v in data_var.atom_loss.values()],
@@ -202,27 +165,14 @@ import numpy as np
 
 jax_root = Path(sys.argv[1])
 out_npz = Path(sys.argv[2])
-count_max = int(sys.argv[3])
-update_frq = int(sys.argv[4])
-diff_esc = [sp for sp in sys.argv[5].split(",") if sp]
-master_npz = Path(sys.argv[6])
+master_npz = Path(sys.argv[3])
 
 os.chdir(jax_root)
 sys.path.insert(0, str(jax_root))
 
 from vulcan3.config import default_config
 vulcan_cfg = default_config()
-
-vulcan_cfg.count_max = count_max
-vulcan_cfg.count_min = count_max + 1
-vulcan_cfg.trun_min = 1e22
-vulcan_cfg.update_frq = update_frq
-vulcan_cfg.diff_esc = diff_esc
-# The pinned VULCAN 2 oracle has no refreshed-interface vm and no hybrid
-# flip (which extends the budget past count_max), so both are off.
-vulcan_cfg.use_vm_mol = False
-vulcan_cfg.use_hybrid_vm_mol = False
-vulcan_cfg.use_print_prog = False
+%(jax_cfg)s
 
 from vulcan3.runtime_validation import validate_runtime_config
 
@@ -267,12 +217,7 @@ print("JAX_OK")
 """
 
 
-def _run_script(
-    script: str,
-    args: list[Path | int],
-    *,
-    timeout: float = 600.0,
-) -> subprocess.CompletedProcess[str]:
+def _run_script(script: str, args: list) -> subprocess.CompletedProcess[str]:
     """Run a script string in a subprocess with PYTHONHASHSEED=0: master's
     matched-step trajectory depends on set order and is not reproducible
     without it."""
@@ -280,12 +225,58 @@ def _run_script(
         [sys.executable, "-c", script, *map(str, args)],
         capture_output=True,
         text=True,
-        timeout=timeout,
+        timeout=900.0,
         env={**os.environ, "PYTHONHASHSEED": "0"},
     )
 
 
-def _atom_dict(data: np.lib.npyio.NpzFile) -> dict[str, float]:
+def _cfg_lines(prefix: str, *tables: dict) -> str:
+    """Render the knob tables as `<prefix><name> = <repr>` lines.
+
+    One table, two renderings ('' for master's cfg module, 'vulcan_cfg.' or
+    'cfg.' for the JAX config object), so the two sides of the comparison
+    cannot drift apart.
+    """
+    return "\n".join(
+        f"{prefix}{name} = {value!r}"
+        for table in tables for name, value in table.items()
+    )
+
+
+def _run_pair(master_root: Path, knobs: dict, jax_script: str) -> tuple[dict, dict]:
+    """Run master, then the port, on HD189's cfg with `knobs` overlaid.
+
+    Master gets `knobs` plus MASTER_ONLY in its cfg file and its own codegen;
+    `jax_script` already carries the JAX rendering. Each script saves an npz
+    (argv[2]); the port's also reads master's (argv[3]). Returns both as
+    dicts, read before the scratch directory goes away.
+    """
+    from oracle import write_master_cfg
+
+    write_master_cfg(
+        master_root,
+        (master_root / "cfg_examples" / "vulcan_cfg_HD189.py").read_text()
+        + "\n# === parity test overrides ===\n"
+        + _cfg_lines("", knobs, MASTER_ONLY) + "\n",
+    )
+    with tempfile.TemporaryDirectory(prefix="master_parity_") as tmp:
+        master_npz = Path(tmp) / "master.npz"
+        jax_npz = Path(tmp) / "jax.npz"
+        for script, args, tag in (
+            (_MASTER_SCRIPT, [master_root, master_npz], "MASTER_OK"),
+            (jax_script, [PACKAGE_ROOT, jax_npz, master_npz], "JAX_OK"),
+        ):
+            res = _run_script(script, args)
+            assert res.returncode == 0 and tag in res.stdout, (
+                f"{tag} subprocess failed {res.returncode}\n"
+                f"--- stdout ---\n{res.stdout}\n"
+                f"--- stderr ---\n{res.stderr}"
+            )
+        return (dict(np.load(master_npz, allow_pickle=True)),
+                dict(np.load(jax_npz, allow_pickle=True)))
+
+
+def _atom_dict(data: dict) -> dict[str, float]:
     """Return atom-loss arrays from the npz as a dict."""
     return {
         str(key): float(value)
@@ -332,83 +323,51 @@ def test_default_hd189_preloop_and_matched_steps_match_master(
     """HD189 initial state and `count_max + 1` matched Ros2 steps match master."""
     from oracle import oracle_worktree
 
-    with tempfile.TemporaryDirectory(prefix="default_parity_") as tmp, \
-            oracle_worktree(
-                "vulcan2_ncho",
-                # The shipped default preset on both sides: an unmatched
-                # composition is a different atmosphere, not a parity result.
-                fastchem_abundance="solar_element_abundances.dat",
-            ) as master_root:
-        tmp_path = Path(tmp)
-        master_npz = tmp_path / "master_hd189.npz"
-        jax_npz = tmp_path / "jax_hd189.npz"
+    knobs = {
+        "count_max": count_max,
+        "count_min": count_max + 1,
+        "trun_min": 1.0e22,
+        "update_frq": update_frq,
+        "diff_esc": diff_esc,
+        "use_print_prog": False,
+        "save_evolution": False,
+        "use_adapt_rtol": False,
+    }
+    jax_script = _JAX_SCRIPT % {"jax_cfg": _cfg_lines("vulcan_cfg.", knobs, JAX_ONLY)}
+    with oracle_worktree(
+        "vulcan2_ncho",
+        # The shipped default preset on both sides: an unmatched
+        # composition is a different atmosphere, not a parity result.
+        fastchem_abundance="solar_element_abundances.dat",
+    ) as master_root:
+        master, jax = _run_pair(master_root, knobs, jax_script)
 
-        master_res = _run_script(
-            _MASTER_SCRIPT,
-            [
-                master_root,
-                master_npz,
-                count_max,
-                update_frq,
-                ",".join(diff_esc),
-            ],
-            timeout=900.0,
-        )
-        assert master_res.returncode == 0, (
-            f"master subprocess failed {master_res.returncode}\n"
-            f"--- stdout ---\n{master_res.stdout}\n"
-            f"--- stderr ---\n{master_res.stderr}"
-        )
-        assert "MASTER_OK" in master_res.stdout
+    assert list(jax["species"]) == list(master["species"])
+    assert int(jax["nr"]) == int(master["nr"])
+    # Exact: the JAX run was seeded from this array.
+    np.testing.assert_array_equal(jax["y_ini"], master["y_ini"])
+    np.testing.assert_array_equal(jax["pco"], master["pco"])
+    np.testing.assert_array_equal(jax["Tco"], master["Tco"])
+    np.testing.assert_allclose(jax["Kzz"], master["Kzz"], rtol=1e-14, atol=0.0)
 
-        jax_res = _run_script(
-            _JAX_SCRIPT,
-            [
-                PACKAGE_ROOT,
-                jax_npz,
-                count_max,
-                update_frq,
-                ",".join(diff_esc),
-                master_npz,
-            ],
-            timeout=900.0,
-        )
-        assert jax_res.returncode == 0, (
-            f"JAX subprocess failed {jax_res.returncode}\n"
-            f"--- stdout ---\n{jax_res.stdout}\n"
-            f"--- stderr ---\n{jax_res.stderr}"
-        )
-        assert "JAX_OK" in jax_res.stdout
+    sig = np.asarray(master["ymix"]) > ymix_min
+    y_relerr = relerr(jax["y"], master["y"], mask=sig)
+    ymix_relerr = relerr(jax["ymix"], master["ymix"], mask=sig)
+    t_relerr = abs(float(jax["t"]) - float(master["t"])) / abs(float(master["t"]))
+    dt_relerr = abs(float(jax["dt"]) - float(master["dt"])) / abs(
+        float(master["dt"])
+    )
 
-        master = np.load(master_npz, allow_pickle=True)
-        jax = np.load(jax_npz, allow_pickle=True)
-
-        assert list(jax["species"]) == list(master["species"])
-        assert int(jax["nr"]) == int(master["nr"])
-        # Exact: the JAX run was seeded from this array.
-        np.testing.assert_array_equal(jax["y_ini"], master["y_ini"])
-        np.testing.assert_array_equal(jax["pco"], master["pco"])
-        np.testing.assert_array_equal(jax["Tco"], master["Tco"])
-        np.testing.assert_allclose(jax["Kzz"], master["Kzz"], rtol=1e-14, atol=0.0)
-
-        sig = np.asarray(master["ymix"]) > ymix_min
-        y_relerr = relerr(jax["y"], master["y"], mask=sig)
-        ymix_relerr = relerr(jax["ymix"], master["ymix"], mask=sig)
-        t_relerr = abs(float(jax["t"]) - float(master["t"])) / abs(float(master["t"]))
-        dt_relerr = abs(float(jax["dt"]) - float(master["dt"])) / abs(
-            float(master["dt"])
-        )
-
-        max_relerr = max(y_relerr, ymix_relerr, t_relerr, dt_relerr)
-        assert int(jax["count"]) == int(master["count"])
-        assert max_relerr <= rtol, (
-            f"HD189 matched-step relerr {max_relerr:.3e} > "
-            f"{rtol:.3e}: y={y_relerr:.3e}, "
-            f"ymix={ymix_relerr:.3e}, t={t_relerr:.3e}, dt={dt_relerr:.3e}, "
-            f"longdy_jax={float(jax['longdy']):.3e}, "
-            f"longdy_master={float(master['longdy']):.3e}, "
-            f"atom_jax={_atom_dict(jax)}, atom_master={_atom_dict(master)}"
-        )
+    max_relerr = max(y_relerr, ymix_relerr, t_relerr, dt_relerr)
+    assert int(jax["count"]) == int(master["count"])
+    assert max_relerr <= rtol, (
+        f"HD189 matched-step relerr {max_relerr:.3e} > "
+        f"{rtol:.3e}: y={y_relerr:.3e}, "
+        f"ymix={ymix_relerr:.3e}, t={t_relerr:.3e}, dt={dt_relerr:.3e}, "
+        f"longdy_jax={float(jax['longdy']):.3e}, "
+        f"longdy_master={float(master['longdy']):.3e}, "
+        f"atom_jax={_atom_dict(jax)}, atom_master={_atom_dict(master)}"
+    )
 
 
 # --- condensation: the `fix_species` pin snapshot ----------------------------
@@ -464,118 +423,8 @@ CONDEN_KNOBS = {
     "use_print_prog": False,
     "save_evolution": False,
 }
-# Master-only knobs (not in JAX's default.yaml) are off so master stays quiet.
-# The JAX-only vm knobs below use the pre-flip baseline of the HD189 cases above.
-CONDEN_MASTER_ONLY = {
-    "use_print_delta": False,
-    "use_live_plot": False,
-    "use_live_flux": False,
-    "use_plot_end": False,
-    "use_plot_evo": False,
-    "use_save_movie": False,
-    "use_flux_movie": False,
-    "plot_TP": False,
-}
-CONDEN_JAX_ONLY = {
-    "use_vm_mol": False, "use_hybrid_vm_mol": False, "high_temp_cut": False,
-}
 # Machine tolerance: realised 8.5e-16 on masked cells, 0.0 on the H2O_l_s column.
 CONDEN_RTOL = 1.0e-12
-
-
-def _cfg_lines(prefix: str, *tables: dict) -> str:
-    """Render the knob tables as `<prefix><name> = <repr>` lines.
-
-    One table, two renderings ('' for master's cfg module, 'cfg.' for the JAX
-    config object), so the two sides of the comparison cannot drift apart.
-    """
-    return "\n".join(
-        f"{prefix}{name} = {value!r}"
-        for table in tables for name, value in table.items()
-    )
-
-
-_CONDEN_MASTER_SCRIPT = r'''
-import os
-import subprocess
-import sys
-import time
-from pathlib import Path
-
-import numpy as np
-
-master_root = Path(sys.argv[1])
-out_npz = Path(sys.argv[2])
-
-(master_root / "vulcan_cfg.py").write_text(
-    (master_root / "cfg_examples" / "vulcan_cfg_HD189.py").read_text()
-    + "\n# === condensation pin parity overrides ===\n"
-    + """%(master_cfg)s\n"""
-)
-
-# make_chem_funs.py writes chem_funs.py before its check_conserv(), which
-# raises under numpy>=1.24; master's vulcan.py ignores that exit code, so
-# only the module's importability matters.
-res = subprocess.run([sys.executable, "make_chem_funs.py"], cwd=str(master_root),
-                     capture_output=True, text=True, timeout=1800)
-probe = subprocess.run(
-    [sys.executable, "-c", "import chem_funs as c; assert c.ni > 0 and c.nr > 0"],
-    cwd=str(master_root), capture_output=True, text=True, timeout=120)
-if probe.returncode != 0:
-    print(res.stdout[-2000:], res.stderr[-2000:], probe.stderr[-2000:])
-    sys.exit(2)
-
-os.chdir(master_root)
-sys.path.insert(0, str(master_root))
-
-import build_atm
-import chem_funs
-import op
-import store
-
-data_var = store.Variables()
-data_atm = store.AtmData()
-data_para = store.Parameters()
-data_para.start_time = time.time()
-make_atm = build_atm.Atm()
-output = op.Output()
-
-data_atm = make_atm.f_pico(data_atm)
-data_atm = make_atm.load_TPK(data_atm)
-make_atm.sp_sat(data_atm)
-rate = op.ReadRate()
-data_var = rate.read_rate(data_var, data_atm)
-data_var = rate.rev_rate(data_var, data_atm)
-data_var = rate.remove_rate(data_var)
-ini_abun = build_atm.InitialAbun()
-data_var = ini_abun.ini_y(data_var, data_atm)
-data_var = ini_abun.ele_sum(data_var)
-
-y_ini = np.asarray(data_var.y_ini, dtype=np.float64).copy()
-pco = np.asarray(data_atm.pco, dtype=np.float64).copy()
-Tco = np.asarray(data_atm.Tco, dtype=np.float64).copy()
-
-data_atm = make_atm.f_mu_dz(data_var, data_atm, output)
-make_atm.mol_diff(data_atm)
-make_atm.BC_flux(data_atm)
-
-solver = op.Ros2()
-solver.naming_solver(data_para)
-op.Integration(solver, output)(data_var, data_atm, data_para, make_atm)
-
-np.savez_compressed(
-    out_npz,
-    species=np.array(list(chem_funs.spec_list), dtype=object),
-    y_ini=y_ini, pco=pco, Tco=Tco,
-    y=np.asarray(data_var.y, dtype=np.float64),
-    ymix=np.asarray(data_var.ymix, dtype=np.float64),
-    t=np.float64(data_var.t), dt=np.float64(data_var.dt),
-    count=np.int64(data_para.count),
-    rejections=np.array([data_para.nega_count, data_para.loss_count,
-                         data_para.delta_count], dtype=np.int64),
-)
-print("MASTER_OK")
-'''
 
 
 _CONDEN_JAX_SCRIPT = r'''
@@ -639,44 +488,18 @@ def test_conden_fix_species_pin_matches_master() -> None:
     """
     from oracle import oracle_worktree
 
-    fmt = {
+    jax_script = _CONDEN_JAX_SCRIPT % {
         "network": CONDEN_KNOBS["network"],
-        "master_cfg": _cfg_lines("", CONDEN_KNOBS, CONDEN_MASTER_ONLY),
-        "jax_cfg": _cfg_lines("cfg.", CONDEN_KNOBS, CONDEN_JAX_ONLY),
+        "jax_cfg": _cfg_lines("cfg.", CONDEN_KNOBS, JAX_ONLY),
     }
-    with tempfile.TemporaryDirectory(prefix="conden_parity_") as tmp, \
-            oracle_worktree("vulcan2_ncho") as master_root:
+    with oracle_worktree("vulcan2_ncho") as master_root:
         # Both sides must read the SAME network file: the condensation rows are
         # indexed positionally off `299 [ H2O -> H2O_l_s ]`.
         network_rel = CONDEN_KNOBS["network"]
         assert (master_root / network_rel).read_bytes() == (
             PACKAGE_ROOT / network_rel
         ).read_bytes(), f"{network_rel} differs between the oracle and this tree"
-
-        tmp_path = Path(tmp)
-        master_npz = tmp_path / "master_conden.npz"
-        jax_npz = tmp_path / "jax_conden.npz"
-
-        master_res = _run_script(
-            _CONDEN_MASTER_SCRIPT % fmt, [master_root, master_npz],
-            timeout=900.0,
-        )
-        assert master_res.returncode == 0 and "MASTER_OK" in master_res.stdout, (
-            f"master subprocess failed {master_res.returncode}\n"
-            f"--- stdout ---\n{master_res.stdout}\n"
-            f"--- stderr ---\n{master_res.stderr}"
-        )
-        jax_res = _run_script(
-            _CONDEN_JAX_SCRIPT % fmt, [PACKAGE_ROOT, jax_npz], timeout=900.0,
-        )
-        assert jax_res.returncode == 0 and "JAX_OK" in jax_res.stdout, (
-            f"JAX subprocess failed {jax_res.returncode}\n"
-            f"--- stdout ---\n{jax_res.stdout}\n"
-            f"--- stderr ---\n{jax_res.stderr}"
-        )
-        # dict() forces the lazy npz reads before the temp dir goes away.
-        master = dict(np.load(master_npz, allow_pickle=True))
-        jax = dict(np.load(jax_npz, allow_pickle=True))
+        master, jax = _run_pair(master_root, CONDEN_KNOBS, jax_script)
 
     # With use_photo=False master's codegen drops the photolysis rows and their
     # photo-only species (make_chem_funs.py:74), so its species list is a

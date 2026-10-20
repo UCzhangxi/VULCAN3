@@ -14,7 +14,8 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
-from _helpers import fast_cfg
+from _helpers import (fast_cfg, stack_atm_statics, stack_integ_states,
+                      unstack_integ_states)
 from test_vmap_while_loop import _build_integ, _build_rs, _max_rel_diff
 
 COUNT_MAX = 30
@@ -61,7 +62,6 @@ def _scale_ratio(bat, sol, other):
 
 @pytest.mark.strict_isolation
 def test_photo_lane_matches_its_solo_run():
-    import vulcan3.outer_loop as outer_loop
 
     vulcan_cfg = _pin_cfg()
 
@@ -93,10 +93,10 @@ def test_photo_lane_matches_its_solo_run():
 
     # --- batch on A's runner ----------------------------------------------
     batched = integA.run_batch(
-        outer_loop.stack_integ_states([sA, sB]),
-        outer_loop.stack_atm_statics([atmA, atmB]),
+        stack_integ_states([sA, sB]),
+        stack_atm_statics([atmA, atmB]),
     )
-    out = outer_loop.unstack_integ_states(batched, 2)
+    out = unstack_integ_states(batched, 2)
 
     for name in ("ymix", "k_arr", "aflux", "tau"):
         bat0, bat1 = getattr(out[0], name), getattr(out[1], name)
@@ -152,10 +152,10 @@ def test_lane_gone_nonfinite_on_a_photo_tick_keeps_its_whole_carry():
         aflux=jnp.zeros_like(s0.aflux),
         tau=jnp.zeros_like(s0.tau),
     )
-    good, frozen = outer_loop.unstack_integ_states(
+    good, frozen = unstack_integ_states(
         integ.run_batch(
-            outer_loop.stack_integ_states([s0, bad]),
-            outer_loop.stack_atm_statics([atm0, atm0]),
+            stack_integ_states([s0, bad]),
+            stack_atm_statics([atm0, atm0]),
         ),
         2,
     )
@@ -191,14 +191,13 @@ def test_queue_on_photo_lanes_matches_the_batch():
     refilled lane left on its predecessor's RT state would integrate a
     different column.
     """
-    from vulcan3 import outer_loop
 
     vulcan_cfg = _pin_cfg()
     integ = _build_integ()
     sA, atmA = integ.prepare_runstate(_build_rs(vulcan_cfg, Tiso=900.0))
     sB, atmB = integ.prepare_runstate(_build_rs(vulcan_cfg, Tiso=1600.0))
-    init_b = outer_loop.stack_integ_states([sA, sB])
-    atm_b = outer_loop.stack_atm_statics([atmA, atmB])
+    init_b = stack_integ_states([sA, sB])
+    atm_b = stack_atm_statics([atmA, atmB])
     ref = integ.run_batch(init_b, atm_b)
 
     (y, t, acc, reason), n_iter = integ.run_queue(
@@ -240,7 +239,6 @@ def test_refill_on_a_photo_tick_applies_photolysis_once():
     are bitwise equal. A second application at the refill moves prev_aflux
     and aflux_change, and aflux_change gates the convergence certificate.
     """
-    from vulcan3 import outer_loop
 
     vulcan_cfg = _pin_cfg(ini_update_photo_frq=1, final_update_photo_frq=1,
                           update_frq=1)
@@ -254,13 +252,13 @@ def test_refill_on_a_photo_tick_applies_photolysis_once():
 
     pair, _ = integ.run_queue(
         lambda job: job,
-        (outer_loop.stack_integ_states([sA, sB]),
-         outer_loop.stack_atm_statics([atmA, atmB])),
+        (stack_integ_states([sA, sB]),
+         stack_atm_statics([atmA, atmB])),
         n_lanes=1, out_fn=out_fn, chunk=1,
     )
     alone, _ = integ.run_queue(
         lambda job: job,
-        (outer_loop.stack_integ_states([sB]), outer_loop.stack_atm_statics([atmB])),
+        (stack_integ_states([sB]), stack_atm_statics([atmB])),
         n_lanes=1, out_fn=out_fn,
     )
     for name, refilled, own in zip(fields, pair, alone):

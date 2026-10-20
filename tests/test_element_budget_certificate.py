@@ -16,16 +16,9 @@ kept its elements.
 
 from __future__ import annotations
 
-import os
-import warnings
-from pathlib import Path
-
 import jax.numpy as jnp
 import pytest
 
-ROOT = Path(__file__).resolve().parent.parent
-os.chdir(ROOT)
-warnings.filterwarnings("ignore")
 
 
 def _cfg():

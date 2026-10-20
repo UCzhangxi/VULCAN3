@@ -5,52 +5,25 @@ Compares sol after a single 2nd-order Rosenbrock step.
 
 from __future__ import annotations
 
-import os
-import sys
-import warnings
-from pathlib import Path
-
 import numpy as np
 
-ROOT = Path(__file__).resolve().parent.parent
-os.chdir(ROOT)
-
-from oracle import oracle_dir_or_skip  # noqa: E402
-
-# The parent verifies the pin and passes a temporary copy (oracle.oracle_dir_or_skip).
-VULCAN_MASTER = oracle_dir_or_skip("this Ros2 step comparison")
-
-warnings.filterwarnings("ignore")
+from _helpers import relerr
+from oracle import (assert_below, enter_master, leave_master,
+                    run_oracle_subprocess, upstream_preloop)
 
 
-def main() -> int:
+def main() -> None:
     # === VULCAN-master pipeline + Ros2 step ===
-    os.chdir(VULCAN_MASTER)
-    sys.path.insert(0, str(VULCAN_MASTER))
-
+    enter_master()
     from vulcan3.config import default_config
 
-    cfg_v = default_config()
     import store as st_v
     import build_atm as ba_v
     import op as op_v
 
-    data_var = st_v.Variables()
-    data_atm = st_v.AtmData()
-    make_atm = ba_v.Atm()
-    data_atm = make_atm.f_pico(data_atm)
-    data_atm = make_atm.load_TPK(data_atm)
-    if cfg_v.use_condense:
-        make_atm.sp_sat(data_atm)
-    rate = op_v.ReadRate()
-    data_var = rate.read_rate(data_var, data_atm)
-    data_var = rate.rev_rate(data_var, data_atm)
-    ini = ba_v.InitialAbun()
-    data_var = ini.ini_y(data_var, data_atm)
-    data_var = ini.ele_sum(data_var)
-    data_atm = make_atm.f_mu_dz(data_var, data_atm, op_v.Output())
-    make_atm.mol_diff(data_atm)
-    make_atm.BC_flux(data_atm)
+    data_var, data_atm = upstream_preloop(
+        default_config(), st_v.Variables(), st_v.AtmData(), ba_v.Atm(),
+        op_v.ReadRate(), ba_v.InitialAbun(), op_v.Output())
     data_var.dt = 1e-10
     data_var.ymix = data_var.y / np.vstack(np.sum(data_var.y, axis=1))
 
@@ -67,11 +40,7 @@ def main() -> int:
     sol_ref = np.asarray(var_after.y, dtype=np.float64).copy()
 
     # === Switch to VULCAN-JAX ===
-    for mod in ("vulcan_cfg", "store", "build_atm", "op", "chem_funs"):
-        sys.modules.pop(mod, None)
-    while str(VULCAN_MASTER) in sys.path:
-        sys.path.remove(str(VULCAN_MASTER))
-    os.chdir(ROOT)
+    leave_master()
 
     import vulcan3.chem_funs as chem_funs
     import jax.numpy as jnp
@@ -93,26 +62,15 @@ def main() -> int:
         atm_static,
         chem_funs._NET_JAX,
     )
-    sol_jax = np.asarray(sol_jax, dtype=np.float64)
 
-    # Compare
-    relerr = np.abs(sol_jax - sol_ref) / np.maximum(np.abs(sol_ref), 1e-12)
-    max_relerr = relerr.max()
-    print(f"sol_jax vs sol_ref: max relerr = {max_relerr:.3e}")
-
-    ok = max_relerr < 1e-3  # generous; the integrator self-corrects
-    print("PASS" if ok else "FAIL")
-    return 0 if ok else 1
+    # generous; the integrator self-corrects
+    assert_below({"sol_jax vs sol_ref": (relerr(sol_jax, sol_ref, floor=1e-12), 1e-3)})
 
 
 def test_main():
-    """Runs main() in a fresh subprocess: the master/JAX module-table swap
-    only works from a cold Python start."""
-    from oracle import run_oracle_subprocess
-
     run_oracle_subprocess(__file__, "vulcan2_ncho",
                           "cfg_examples/vulcan_cfg_HD189.py")
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()

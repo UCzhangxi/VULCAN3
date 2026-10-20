@@ -9,17 +9,11 @@ Ports vm_branch `build_atm.apply_high_temp_cut`. Two layers:
 
 from __future__ import annotations
 
-import os
-import warnings
 from pathlib import Path
 
 import numpy as np
 import pytest
 from _helpers import make_pco, tpk_cfg
-
-ROOT = Path(__file__).resolve().parent.parent
-os.chdir(ROOT)
-warnings.filterwarnings("ignore")
 
 
 # Pure selection/re-grid logic

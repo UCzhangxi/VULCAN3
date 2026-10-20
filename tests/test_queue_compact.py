@@ -49,9 +49,9 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from _helpers import stack_atm_statics, stack_integ_states
 from test_vmap_while_loop import _build_integ, _build_rs, _pin_cfg
 
-from vulcan3 import outer_loop
 from vulcan3.outer_loop import _queue_compact_rungs
 
 TISO = (900.0, 1000.0, 1100.0, 1200.0, 1300.0)
@@ -143,8 +143,8 @@ def photo_off():
     cfg = _pin_cfg()
     integ = _build_integ()
     pairs = [integ.prepare_runstate(_build_rs(cfg, Tiso=T)) for T in TISO]
-    st = outer_loop.stack_integ_states([s for s, _ in pairs])
-    atm = outer_loop.stack_atm_statics([a for _, a in pairs])
+    st = stack_integ_states([s for s, _ in pairs])
+    atm = stack_atm_statics([a for _, a in pairs])
     return integ, (_with_caps(st, CAPS_OFF), atm)
 
 
@@ -210,8 +210,8 @@ def test_compaction_matches_photo_on():
     integ = _build_integ()
     sA, aA = integ.prepare_runstate(_build_rs(cfg, Tiso=900.0))
     sB, aB = integ.prepare_runstate(_build_rs(cfg, Tiso=1600.0))
-    st = outer_loop.stack_integ_states([sA, sB, sA, sB])
-    atm = outer_loop.stack_atm_statics([aA, aB, aA, aB])
+    st = stack_integ_states([sA, sB, sA, sB])
+    atm = stack_atm_statics([aA, aB, aA, aB])
     jobs = (_with_caps(st, (7, 15, 24, 30)), atm)
     off, n_off = integ.run_queue(_ident, jobs, n_lanes=3, out_fn=_whole, chunk=1)
     on, n_on, stt = integ.run_queue(_ident, jobs, n_lanes=3, out_fn=_whole, chunk=1,
@@ -255,8 +255,8 @@ def test_compacted_queue_jvp_matches_the_batch_jvp():
     cfg = fast_cfg(count_max=8, nz=12, use_vm_mol=False, use_hybrid_vm_mol=False)
     integ = _build_integ()
     pairs = [integ.prepare_runstate(_build_rs(cfg, Tiso=T)) for T in (900.0, 1200.0)]
-    s0 = _with_caps(outer_loop.stack_integ_states([s for s, _ in pairs]), (4, 8))
-    a0 = outer_loop.stack_atm_statics([a for _, a in pairs])
+    s0 = _with_caps(stack_integ_states([s for s, _ in pairs]), (4, 8))
+    a0 = stack_atm_statics([a for _, a in pairs])
 
     def jobs(x):
         f = jnp.exp(x)
@@ -337,8 +337,8 @@ def test_tail_loops_do_not_copy_the_lane_carry():
     integ = _build_integ()
     sA, aA = integ.prepare_runstate(_build_rs(cfg, Tiso=900.0))
     sB, aB = integ.prepare_runstate(_build_rs(cfg, Tiso=1600.0))
-    st = outer_loop.stack_integ_states([sA, sB, sA, sB])
-    atm = outer_loop.stack_atm_statics([aA, aB, aA, aB])
+    st = stack_integ_states([sA, sB, sA, sB])
+    atm = stack_atm_statics([aA, aB, aA, aB])
     jobs = (_with_caps(st, (7, 15, 24, 30)), atm)
     ring = int(np.prod(st.y_time_ring.shape[1:]))     # one lane's convergence ring
     assert ring > 1

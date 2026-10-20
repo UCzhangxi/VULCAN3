@@ -1,5 +1,5 @@
 """Every knob `runtime_validation` bound-checks must be declared in every
-shipped config.
+shipped config, and each check refuses its silently wrong values.
 
 `_validate_numerical_bounds` checks what a config declares and skips the
 rest, so the YAML is the only home of each value. That holds only while
@@ -19,14 +19,9 @@ ROOT = Path(__file__).resolve().parent.parent
 CONFIGS = ROOT / "src" / "vulcan3" / "configs"
 VALIDATION = ROOT / "src" / "vulcan3" / "runtime_validation.py"
 
-# Conditionally-read knobs: the validator only reaches them when another knob
-# turns their subsystem on, so a config that leaves the subsystem off need not
+# Read only when use_condense is on, so a config that leaves it off need not
 # declare them. Everything else is unconditional.
-_CONDITIONAL = {
-    "high_temp_cut_K", "high_temp_cut_P",          # only when high_temp_cut
-    "fastchem_newton_max_iter", "fastchem_newton_tol",  # only for EQ/const_lowT
-    "start_conden_time", "stop_conden_time",       # only when use_condense
-}
+_CONDITIONAL = {"start_conden_time", "stop_conden_time"}
 
 
 def _validator_source() -> str:
@@ -34,17 +29,12 @@ def _validator_source() -> str:
 
 
 def _checked_knobs() -> set[str]:
-    """Knob names `_validate_numerical_bounds` reads, from the source itself."""
-    src = _validator_source()
-    names = set(re.findall(r'_declared\(cfg,\s*"([A-Za-z_]+)"', src))
-    # the two table-driven loops
-    for block in re.findall(r"for key, unit in \((.*?)\n    \):", src, re.S):
-        names |= set(re.findall(r'\("([a-z_]+)",', block))
-    for block in re.findall(
-            r'for key in \("(?:count_min|ini_update_photo_frq)".*?\):', src, re.S):
-        names |= set(re.findall(r'"([a-z_]+)"', block))
-    assert len(names) > 25, f"knob scrape found only {len(names)}; parser broke"
-    return names
+    """Knob names `runtime_validation` reads, from the source itself."""
+    from vulcan3.runtime_validation import _COUNTERS, _FINITE_POSITIVE
+
+    names = set(re.findall(r'_declared\(cfg,\s*"([A-Za-z_]+)"', _validator_source()))
+    assert len(names) > 5, f"knob scrape found only {len(names)}; parser broke"
+    return names | set(_COUNTERS) | set(_FINITE_POSITIVE)
 
 
 def _config_files() -> list[Path]:
@@ -97,11 +87,27 @@ def test_the_validator_carries_no_literal_config_defaults():
         + "\nUse _declared(cfg, key) and skip an undeclared knob instead.")
 
 
-@pytest.mark.parametrize("key", ["ini_update_photo_frq", "final_update_photo_frq"])
-@pytest.mark.parametrize("value", [0, -1, 1.5, float("nan"), float("inf"), 2**31])
-def test_invalid_photolysis_cadence_is_refused(key, value):
+_VALID = dict(nz=10, P_b=1e9, P_t=1e-2, Mp=1.9e30, Rp=8e9, rtol=0.25,
+              geom_conv_tol=1e-3, element_budget_tol=1e-2, dt_min=1e-14,
+              dt_max=1e15, sl_angle=1.0, humidity=0.5, count_min=120,
+              count_max=10000, update_frq=100, conv_step=500,
+              batch_max_retries=110, ini_update_photo_frq=100,
+              final_update_photo_frq=5)
+_NAN = float("nan")
+
+
+@pytest.mark.parametrize("bad", [
+    dict(nz=2), dict(P_b=1e-3), dict(P_t=0.0), dict(Mp=_NAN), dict(Rp=-1.0),
+    dict(rtol=float("inf")), dict(geom_conv_tol=0.0), dict(element_budget_tol=_NAN),
+    dict(dt_min=1e16), dict(sl_angle=58.0), dict(humidity=50.0),
+    *(dict(**{k: v}) for k in ("count_min", "batch_max_retries",
+                               "ini_update_photo_frq", "final_update_photo_frq")
+      for v in (0, 1.5, _NAN, 2**31)),
+], ids=repr)
+def test_silently_wrong_values_are_refused(bad):
+    """Each value refused alone; the valid baseline passes clean."""
     from types import SimpleNamespace
     from vulcan3.runtime_validation import _validate_numerical_bounds
 
-    errors = _validate_numerical_bounds(SimpleNamespace(**{key: value}))
-    assert any(key in error for error in errors)
+    assert _validate_numerical_bounds(SimpleNamespace(**_VALID)) == []
+    assert len(_validate_numerical_bounds(SimpleNamespace(**{**_VALID, **bad}))) == 1

@@ -1,26 +1,18 @@
-"""Validate diffusion.py against op.diffdf and op.lhs_jac_tot.
+"""Validate the NumPy diffusion reference against op.diffdf, op.lhs_jac_tot
+and the vm / settling / settling_vm variants.
 
-Compares both the operator (RHS contribution) and the Jacobian assembly.
+The central operator and its Jacobian assembly are compared on master's own
+pre-loop state. The variants run on the port's pre-loop state with synthetic
+vm/vs populated.
 """
 
 from __future__ import annotations
 
-import os
-import sys
-import warnings
-from pathlib import Path
-
 import numpy as np
 
-ROOT = Path(__file__).resolve().parent.parent
-os.chdir(ROOT)
-
-from oracle import oracle_dir_or_skip  # noqa: E402
-
-
-VULCAN_MASTER = oracle_dir_or_skip("this diffusion comparison")
-
-warnings.filterwarnings("ignore")
+from _helpers import relerr
+from oracle import (assert_below, enter_master, leave_master,
+                    run_oracle_subprocess, upstream_preloop)
 
 # Bars: operator 1e-3 (He's net flux is a ~12-digit cancellation; worst
 # cell ~3e-4 at the roundoff floor). diag 2.0 is a sign check only (a flipped
@@ -30,34 +22,21 @@ warnings.filterwarnings("ignore")
 OP_RTOL = 1e-3
 DIAG_RTOL = 2.0
 OFFDIAG_RTOL = 1e-10
+FLOOR_FRAC = 1e-12  # variants: cancellation-residue floor, a fraction of the reference peak
 
 
-def main() -> int:
+def main() -> None:
     # === Set up VULCAN-master state for reference ===
-    os.chdir(VULCAN_MASTER)
-    sys.path.insert(0, str(VULCAN_MASTER))
-
-    import vulcan_cfg as cfg_v
-    import store as st_v
+    enter_master()
     import build_atm as ba_v
+    import chem_funs as cf_v
     import op as op_v
+    import store as st_v
+    import vulcan_cfg as cfg_v
 
-    data_var = st_v.Variables()
-    data_atm = st_v.AtmData()
-    make_atm = ba_v.Atm()
-    data_atm = make_atm.f_pico(data_atm)
-    data_atm = make_atm.load_TPK(data_atm)
-    if cfg_v.use_condense:
-        make_atm.sp_sat(data_atm)
-    rate = op_v.ReadRate()
-    data_var = rate.read_rate(data_var, data_atm)
-    data_var = rate.rev_rate(data_var, data_atm)
-    ini = ba_v.InitialAbun()
-    data_var = ini.ini_y(data_var, data_atm)
-    data_var = ini.ele_sum(data_var)
-    data_atm = make_atm.f_mu_dz(data_var, data_atm, op_v.Output())
-    make_atm.mol_diff(data_atm)
-    make_atm.BC_flux(data_atm)
+    data_var, data_atm = upstream_preloop(
+        cfg_v, st_v.Variables(), st_v.AtmData(), ba_v.Atm(), op_v.ReadRate(),
+        ba_v.InitialAbun(), op_v.Output())
     data_var.dt = 1e-10  # arbitrary; affects c0 in lhs_jac_tot
 
     y = np.asarray(data_var.y, dtype=np.float64).copy()
@@ -68,27 +47,24 @@ def main() -> int:
     diff_ref = np.asarray(odes.diffdf(y, data_atm), dtype=np.float64)
     lhs_ref = np.asarray(odes.lhs_jac_tot(data_var, data_atm), dtype=np.float64)
 
-    # Reference chemistry Jacobian (no diffusion)
-    import chem_funs as cf_v
-
+    # Reference chemistry Jacobian (no diffusion). VULCAN's convention:
+    # lhs = c0*I - chem_J - diff_J, so this is already the negated contribution.
     chem_jac_ref = -np.asarray(cf_v.symjac(y, data_atm.M, data_var.k), dtype=np.float64)
-    # VULCAN's convention: lhs = c0*I - chem_J - diff_J; chem_jac_ref above is
-    # already the negated contribution.
 
     # === Switch to VULCAN-JAX modules ===
-    for mod in ("vulcan_cfg", "store", "build_atm", "op", "chem_funs"):
-        sys.modules.pop(mod, None)
-    while str(VULCAN_MASTER) in sys.path:
-        sys.path.remove(str(VULCAN_MASTER))
-    os.chdir(ROOT)
+    leave_master()
 
-    sys.path.insert(0, str(Path(__file__).resolve().parent))
     import diffusion_numpy_ref as diff_mod
     from vulcan3.config import default_config
+    from vulcan3.state import RunState, legacy_view
 
     cfg_jax = default_config()
+    # The variants' state: the port's typed pre-loop on the unmodified config,
+    # as a legacy `(var, atm)` shim for master's op.ODESolver (it reads only
+    # var.y and atm.*).
+    var_p, atm_p, _ = legacy_view(RunState.with_pre_loop_setup(cfg_jax))
     # op.diffdf is the central scheme, so keep the upwind vm term off even if
-    # the default changes. test_diffusion_variants.py tests the upwind kernel.
+    # the default changes; the variants below test the upwind kernel.
     cfg_jax.use_vm_mol = False
     cfg_jax.use_hybrid_vm_mol = False
 
@@ -99,12 +75,7 @@ def main() -> int:
     # Absolute floor so cancellation residues near zero (physically zero
     # diffusion at near-zero abundance) don't blow up the relative error.
     abs_tol = max(1e-12, 1e-12 * np.abs(diff_ref).max())
-    relerr = np.abs(diff_jax - diff_ref) / np.maximum(np.abs(diff_ref), abs_tol)
-    print(f"diffdf max relerr: {relerr.max():.3e}")
-    if not relerr.max() < OP_RTOL:
-        max_idx = np.unravel_index(relerr.argmax(), relerr.shape)
-        print(f"FAIL diff operator at layer {max_idx[0]}, species {max_idx[1]}")
-        print(f"  jax={diff_jax[max_idx]:.4e} ref={diff_ref[max_idx]:.4e}")
+    scores = {"diffdf": (relerr(diff_jax, diff_ref, floor=abs_tol), OP_RTOL)}
 
     # === Compare Jacobian blocks ===
     diag_d, sup_d, sub_d = diff_mod.diffusion_block_diags(coeffs)
@@ -113,7 +84,6 @@ def main() -> int:
     r = 1.0 + 1.0 / np.sqrt(2.0)
     c0 = 1.0 / (r * data_var.dt)
     diff_jac_only = lhs_ref - chem_jac_ref
-    
     np.fill_diagonal(diff_jac_only, np.diag(diff_jac_only) - c0)
 
     # diff_jac_only mapping:
@@ -132,32 +102,60 @@ def main() -> int:
         return float(np.max(np.where(
             d < jac_abs_tol, 0.0, d / np.maximum(np.abs(ref), jac_abs_tol))))
 
-    max_diag_err = _err(diff_jac_only[idx, idx], -diag_d)
-    max_sup_err = _err(diff_jac_only[idx[:-1], idx[1:]], -sup_d)
-    max_sub_err = _err(diff_jac_only[idx[1:], idx[:-1]], -sub_d)
+    scores["jac diag block"] = (_err(diff_jac_only[idx, idx], -diag_d), DIAG_RTOL)
+    scores["jac super block"] = (
+        _err(diff_jac_only[idx[:-1], idx[1:]], -sup_d), OFFDIAG_RTOL)
+    scores["jac sub block"] = (
+        _err(diff_jac_only[idx[1:], idx[:-1]], -sub_d), OFFDIAG_RTOL)
 
-    print(f"jac diag block max relerr:  {max_diag_err:.3e}")
-    print(f"jac super block max relerr: {max_sup_err:.3e}")
-    print(f"jac sub block max relerr:   {max_sub_err:.3e}")
+    # === Variants (= op.diffdf_vm / diffdf_settling / diffdf_settling_vm) ===
+    # Synthetic mixed-sign interface velocities (shape (nz-1, ni)) so the
+    # sign-dependent upwind branches are actually exercised; setup leaves
+    # atm.vm all-zero with use_vm_mol=False.
+    yp = var_p.y
+    nzp, nip = yp.shape
+    rng = np.random.default_rng(0)
+    atm_p.vs = (rng.standard_normal((nzp - 1, nip)) * 0.01).astype(np.float64)
+    atm_p.vm = (rng.standard_normal((nzp - 1, nip)) * 50.0).astype(np.float64)
 
-    ok = (
-        relerr.max() < OP_RTOL
-        and max_diag_err < DIAG_RTOL
-        and max_sup_err < OFFDIAG_RTOL
-        and max_sub_err < OFFDIAG_RTOL
-    )
-    print("PASS" if ok else "FAIL")
-    return 0 if ok else 1
+    # Upstream inconsistency: master's op.diffdf_settling_vm omits the vm
+    # advective term at j=0 while op.diffdf_vm keeps it (vm_branch carries the
+    # same quirk). VULCAN-JAX stays self-consistent at j=0 across all modes,
+    # so settling_vm is compared on rows 1.. and the j=0 gap is pinned to
+    # that exact term below.
+    odes_p = op_v.ODESolver()
+    for mode, upstream, label, rows, bound in (
+        ("vm", odes_p.diffdf_vm, "diffdf_vm", slice(None), 1e-3),
+        ("settling", odes_p.diffdf_settling, "diffdf_settling", slice(None), 1e-5),
+        ("settling_vm", odes_p.diffdf_settling_vm, "diffdf_settling_vm (rows 1..)",
+         slice(1, None), 1e-5),
+    ):
+        ref = np.asarray(upstream(yp, atm_p), dtype=np.float64)
+        got = diff_mod.apply_diffusion(
+            yp, diff_mod.build_diffusion_coeffs(yp, atm_p, cfg_jax, mode=mode))
+        scores[label] = (
+            relerr(got[rows], ref[rows], floor=FLOOR_FRAC * np.abs(ref).max()), bound)
+
+    # The loop ended on settling_vm. Operator gap at j=0 = (vm upwind that JAX
+    # keeps but master drops) applied to (y0, y1):
+    # -[ (vm0>0)*vm0*y0 + (vm0<0)*vm0*y1 ] / dzi0.
+    vm0 = np.asarray(atm_p.vm)[0]
+    dzi0 = float(np.asarray(atm_p.dzi)[0])
+    y0 = np.asarray(yp)[0]
+    y1 = np.asarray(yp)[1]
+    expected_j0_gap = -((vm0 > 0) * vm0 * y0 + (vm0 < 0) * vm0 * y1) / dzi0
+    j0_gap = got[0] - ref[0]
+    scores["diffdf_settling_vm j=0 gap == omitted vm term"] = (
+        relerr(j0_gap, expected_j0_gap, floor=1e-10 * np.abs(expected_j0_gap).max()),
+        1e-6)
+
+    assert_below(scores)
 
 
 def test_main():
-    """Runs main() in a fresh subprocess: the master/JAX module-table swap
-    only works from a cold Python start."""
-    from oracle import run_oracle_subprocess
-
     run_oracle_subprocess(__file__, "vulcan2_ncho",
                           "cfg_examples/vulcan_cfg_HD189.py")
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()

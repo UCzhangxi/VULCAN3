@@ -1,7 +1,7 @@
 """`rates_jax.build_rate_array` must stay differentiable.
 
 The rate build is one implementation shared by setup and gradients (parity
-against master is `test_rates.py` / `test_gibbs.py`, and against the legacy
+against master is `test_gibbs.py`, and against the legacy
 chain `test_read_rate.py`). What is only testable here is that the tangents
 survive: a non-finite jvp w.r.t. T or w.r.t. an Arrhenius coefficient would
 silently wreck every T-profile / rate-uncertainty sensitivity.

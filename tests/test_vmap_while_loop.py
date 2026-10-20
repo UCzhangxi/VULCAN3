@@ -16,7 +16,8 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
-from _helpers import fast_cfg, mass_for_gravity
+from _helpers import (fast_cfg, mass_for_gravity, stack_atm_statics,
+                      stack_integ_states, unstack_integ_states)
 
 # Termination via count_max for speed -> reason 3 ("too_many"). Kept small so
 # the whole batch integrates in a few seconds including JIT compile.
@@ -74,7 +75,6 @@ def _max_rel_diff(batched_ymix, ref_ymix, floor=YMIX_FLOOR):
 @pytest.mark.strict_isolation
 def test_run_batch_matches_solo_runs():
     import jax.numpy as jnp
-    import vulcan3.outer_loop as outer_loop
     from vulcan3.atm_setup import surface_gravity
 
     vulcan_cfg = _pin_cfg()
@@ -89,10 +89,10 @@ def test_run_batch_matches_solo_runs():
     ref = integ._runner(init_state, atm_static)  # single-profile ground truth
 
     def run_batch(states, atms):
-        return outer_loop.unstack_integ_states(
+        return unstack_integ_states(
             integ.run_batch(
-                outer_loop.stack_integ_states(states),
-                outer_loop.stack_atm_statics(atms),
+                stack_integ_states(states),
+                stack_atm_statics(atms),
             ),
             K,
         )
