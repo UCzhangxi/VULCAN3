@@ -4,7 +4,7 @@ Evidence for these items is in `notes.md` (this repo's, unless another repo is n
 
 1. [decision] Send the reply to the external user's 2026-10-14 report; the decisions it carries are settled (detail below).
 2. [decision] Claim `vulcan3` on PyPI: the README installs put TestPyPI first, so a TestPyPI package can shadow its PyPI namesake.
-3. [unverified] Build and A/B the branch `cuda-solve-guard` (CUDA solve divides outside the reciprocal's safe range; build stamp covers the arch and nvcc) on a NAS GH200, then merge it.
+3. [unverified] Build and A/B the CUDA solve guard and build stamp (on main, not yet compiled) on a NAS GH200 before the next production run.
 
 ## 1. Reply to the external user
 
@@ -16,9 +16,9 @@ Decided by the maintainer (2026-10-20):
 - The equilibrium start uses ExoGibbs (FastChem removed in `fcd4c28`, 0.15.0);
   say so in reply to the FastChem 4 offer.
 - Earth: on main the clone's example converges once the element-budget term is
-  off (`element_budget_tol: .inf`); an unconverged run now names the term that
-  held it and this switch (notes "Withdrawn configs"). Their tree predates the
-  term, so it is not their failure.
+  off (`element_budget_tol: .inf`) and then matches upstream to 0.4% in the bulk
+  species; an unconverged run now names the term that held it and this switch
+  (notes "Withdrawn configs"). Their tree predates the term.
 
 Also tell them (checked in the code on main):
 - Ctrl+C opens a shell with the run state, and `use_plot_end` / `use_plot_evo`
@@ -55,20 +55,19 @@ and its tag were made in a session whose record is not on daw; vulcan-retrieval'
 todo lists confirming them. Done when the name is claimed (and, if decided, the
 packages are published).
 
-## 3. CUDA solve guard and build stamp (branch `cuda-solve-guard`)
+## 3. CUDA solve guard and build stamp
 
-- The branch makes `bt_lu_solve_warp0` divide when any pivot of a layer leaves
-  [2^-1000, 2^1000] (the factor's `bt_div_by_rcp` range) and run the old multiply
-  otherwise, and stamps the CUDA library with the source hash plus a hash of the
-  arch and `nvcc --version`. Not compiled: daw has no nvcc. No production solve is
-  known to reach such a pivot (notes "Solver conditioning").
+- On main (`2e947dc`): `bt_lu_solve_warp0` divides when any pivot of a layer
+  leaves [2^-1000, 2^1000] (the factor's `bt_div_by_rcp` range) and runs the old
+  multiply otherwise; the CUDA library's stamp is the source hash plus a hash of
+  the arch and `nvcc --version`. Not compiled: daw has no nvcc. A production job
+  builds the kernel at start, so check it before the next run.
 - On a GH200 (environment as `tools/gpu_kernel_test.pbs` sets it), in two scratch
-  clones of main and the branch: build both libraries with the production nvcc
-  and `NVCC_ARCH=sm_90`; compare `cuobjdump --dump-resource-usage` for
-  `bt_solve_kernel`; run `tools/ab_cuda_solve.py` (its docstring has the capture /
-  run / compare steps); run `tests/test_solver_fast.py` with
-  `JAX_PLATFORMS=cuda,cpu`, plain and under the command-buffer flags, and check the
-  CUDA tests pass rather than skip.
+  clones at `bd97791` (old) and main (new): build both libraries with the
+  production nvcc and `NVCC_ARCH=sm_90`; compare `cuobjdump --dump-resource-usage`
+  for `bt_solve_kernel`; run `tools/ab_cuda_solve.py` (its docstring has the
+  capture / run / compare steps); or simply run `tools/gpu_kernel_test.pbs`, which
+  now runs the CUDA tests instead of skipping them.
 - Done means: every A/B digest bitwise equal at 792 lanes, the subnormal-pivot
   block finite on the new kernel, solve time unchanged, the `ffi` tests passing;
-  then merge without `tools/ab_cuda_solve.py`.
+  then delete `tools/ab_cuda_solve.py`.

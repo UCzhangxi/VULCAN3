@@ -549,9 +549,9 @@ Earth and K2-18b; an external user reports both converge upstream (todo).
 - Earth on main [M] (`c61fd34`, CPU; the records above predate the budget term):
   vulcan3 hits the 20000-step cap at longdy 0.040 (below `yconv_min` 0.1); with
   `element_budget_tol: 1e9` it certifies at 11411 (longdy 0.0999): the budget term
-  is the only blocker. Inputs: the clone's network, atm file and four NASA-9 files
-  the package lacks; `Mp` for `gs`; no `dt_max` (1e17 > `DT_MAX_S`) or `Ar`.
-  Upstream: a clone copy with the C13 fix and four missing keys.
+  is the only blocker. Upstream (clone copy, C13 fix, four missing keys) certifies at
+  13331; the two columns agree to median 3.3e-4 dex, bulk species <= 2e-3 dex
+  (worst CH3NH2 0.056). Inputs: the clone's network, atm file and four NASA-9 files.
 - K2-18b re-add (needs the external user's DMS-2025 network and atm file): convert
   their YAML, check `remove_list` by position (C14), hash-pin inputs, run to end_case 1.
 
