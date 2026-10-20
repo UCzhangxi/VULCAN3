@@ -33,9 +33,8 @@ deleted 2026-10-19).
   `oracle.yml` is `workflow_dispatch` only, one process per slow test; last green
   dispatch 37173830150 at `b372e65`.
 - Oracle clones: `vulcan2_ncho` 80f75b9, `vulcan2_fastchem_ps_order` 8970337
-  (provenance only, no test), `vulcan3_vm_branch` 84d010d. On daw the
-  clones are clean at those commits with `core.fileMode false` (copies had left
-  mode-only changes and deleted `.DS_Store` files; restored 2026-10-20), so
+  (provenance only, no test), `vulcan3_vm_branch` 84d010d. On daw the clones are
+  clean at those commits with `core.fileMode false`, so
   `VULCAN_MASTER_DIR=/home/imalsky/VULCAN_Project/.oracles/vulcan2_ncho` works.
 - Fixtures: daw's `tests/data/*.npz` are an x86-64 rebuild at `2fef3c1`; the
   tracked `FIXTURES.json` is the 2026-09-19 arm64 manifest (old `vulcan_jax`
@@ -112,9 +111,9 @@ certificate window (a science decision).
 Every place vulcan3 departs from the pinned VULCAN 2, with its recorded reason.
 Upstream errors corrected in the port are in "Parity ledger". The provenance
 audit (2026-10-19) covered only the early history (batch A: e46234a..7eda1af,
-Apr-Jul 2026, 60 commits); no session records exist for those commits, so items
-marked "provenance not recorded" need the maintainer's confirmation (todo). The
-later 328 commits (batches B-D) were not audited. Lines checked at `93896f6`.
+Apr-Jul 2026, 60 commits); the later 328 commits (batches B-D) are not audited.
+The maintainer keeps every departure below ("Decided by the maintainer, not to be
+re-opened"), including those marked "provenance not recorded". Lines at `93896f6`.
 
 Convergence and certificate
 - Geometry term C21 (`geom_conv_tol` 1e-3; `default.yaml:176`, `W39b.yaml:170`;
@@ -205,15 +204,14 @@ network (the 2025 network changed no certification, +5% per tick), nz 62 over
 1e-9..7.6 bar (master: 150 over 5e-9..50 bar).
 
 Referee verdicts. An outside review (at `93896f6`) and a second referee checked the
-departures above; their numbers are their own [M]. Owed runs: todo "Confirm the
-departures from VULCAN master".
+departures above; their numbers are their own [M]. Their measurements are optional.
 - Atom-conservation projection: keep. On x86 the worst normalised defect went
   8.7e-14 -> 4.4e-16, but 126 of 360 individual residuals got worse; measure on/off
   on real columns.
 - Ros2 stage repair: keep. A 50%-of-carrier correction is inside the designed cap
   (`_REPAIR_MAX_CELL_FRAC` 1.0). Both ask for on/off on real draws plus a
   |correction|/carrier histogram.
-- `DT_MAX_S` 1e15: keep; a `dt_max` sweep 1e11..1e17 on difficult saved columns is owed.
+- `DT_MAX_S` 1e15: keep; a `dt_max` sweep 1e11..1e17 on difficult columns is optional.
 - Geometry and element-budget terms: the outside review would demote both to
   diagnostics under the original-criteria rule. The second referee keeps both: each
   fixes a measured defect ("Certificates", "Stage repair and element budget"); every
@@ -227,9 +225,8 @@ departures from VULCAN master".
   `stop()` accepts a stale one), introduced in `001082e`; the budget term, from
   `46313d1`, polices the corrections the stage repair deliberately drops
   (`c6fdf4e`), and a certifying W39b photo-off column still drifts 2.16e-3, so it
-  can bind. Both are extra primal stopping rules that can open likelihood holes,
-  so the owed measurement is their incidence at the first chemistry-qualified
-  candidate on a saved W39b batch.
+  can bind. Both are extra stopping rules that can open likelihood holes, sized by
+  their incidence at the first chemistry-qualified candidate on a saved W39b batch.
 - Retry cap 110: keep (inert, above).
 - rtol 0.2, `conver_ignore` [], `count_max` 1e4 equal upstream's HD189 example (no
   `use_adapt_rtol` line there, above), not its root `vulcan_cfg.py` (0.25, adaptive,
@@ -381,7 +378,7 @@ reaches those dt (every solve instrumented):
 
 - Block-local pivoting can fail where banded LU does not: the outside review's
   generic 2x2 counterexample ([[0,1],[1,1]]) gives NaN. No physical W39b matrix has
-  been shown to fail; real large-dt stage matrices against banded LU are owed (todo).
+  been shown to fail; real large-dt stage matrices against banded LU are not tested.
 
 - Reverse mode through the block solve is componentwise backward stable
   (Oettli-Prager 3.8e-14..2.4e-12 at dt 1e11) although a normwise residual against
@@ -458,10 +455,9 @@ reaches those dt (every solve instrumented):
   none on in a shipped config (`use_topflux`, `use_botflux`/`v_dep`,
   `use_fix_sp_bot`, `use_fix_H2He`, the `fix_species` pin);
   a `loss_ex` containing H fails the runner build (H is the reference atom).
-  So an open column can fail to certify on exchange it is meant to have, exiting on
-  the step cap without naming the term [I]: Earth (bottom flux and pins), the
-  external user's K2-18b (`fix_species` with condensation), the JWST tool's sulfur
-  condensation (whole-column `fix_species` pin). Precedent: KPP invariant-preserving
+  So an open column can fail to certify on exchange it is meant to have, ending at
+  the step cap without naming the term: measured on Earth ("Withdrawn configs"), [I]
+  for the external user's K2-18b; the JWST tool's S8 pin certified. Precedent: KPP invariant-preserving
   Rosenbrock, CVODE projection, Sandu 2001 (doi:10.1006/jcph.2001.6750).
 - The "strong-Kzz top boundary collapse" of W39b domain extensions was this leak
   in a 3000-3500 K bottom: since 0.6.0 the 50 bar -> 5e-9 bar column converges in
@@ -541,8 +537,7 @@ Reverse mode.
 
 ## Withdrawn configs
 
-Earth and K2-18b. Their T-P / Kzz files are deleted; these numbers are the record. An external user
-reports both converge upstream (todo).
+Earth and K2-18b; an external user reports both converge upstream (todo).
 - Earth, 2000 steps: vulcan3 longdy 54.33 (atomic C at z=116, VMR 8.1e-12),
   upstream 0.880 (C2H4 at z=81); neither converged (upstream needed C13 and four
   missing keys to start). `atom_loss[H] = 2.98e3` is not a leak (`use_fix_sp_bot`
@@ -551,11 +546,12 @@ reports both converge upstream (todo).
   central 30001 at 0.459, upstream 1.00 at 3000; the clock froze at 6.18e4 s
   from step 3001. Its `remove_list` resolved by position to `NH3 + CH` and `SH +
   NO2`, and it omitted `batch_max_retries`.
-- Earth on main (both records predate the element-budget term, 0.9.0): upstream
-  from a disposable clone copy (C13 fix, four missing keys); vulcan3 from a scratch
-  dir with the clone's `SNCHO_full_photo_network.txt` and `atm_Earth_Jan_Kzz.txt`,
-  with and without `element_budget_tol: 1e9`, after dropping the refused keys (`Mp`
-  for `gs`), `dt_max` (1e17 > `DT_MAX_S`) and `Ar`.
+- Earth on main [M] (`c61fd34`, CPU; the records above predate the budget term):
+  vulcan3 hits the 20000-step cap at longdy 0.040 (below `yconv_min` 0.1); with
+  `element_budget_tol: 1e9` it certifies at 11411 (longdy 0.0999): the budget term
+  is the only blocker. Inputs: the clone's network, atm file and four NASA-9 files
+  the package lacks; `Mp` for `gs`; no `dt_max` (1e17 > `DT_MAX_S`) or `Ar`.
+  Upstream: a clone copy with the C13 fix and four missing keys.
 - K2-18b re-add (needs the external user's DMS-2025 network and atm file): convert
   their YAML, check `remove_list` by position (C14), hash-pin inputs, run to end_case 1.
 
@@ -614,6 +610,8 @@ reports both converge upstream (todo).
   threading and `_make_conden_branch`. `compute_sat_p` knows H2S but
   `conden.GAS_TO_CONDENSATE` does not, so `condense_sp=['H2S']` fails late.
 - `high_temp_cut` is a host-side re-grid (raises `P_b`), not a T-clip.
+- Setup never writes config knobs (`state._cfg_overlay` drops the write): the
+  `use_sat_surfaceH2O` bottom pin is built in `OuterLoop._build_statics` from `sat_mix`.
 - Codegen cache `__pycache__/chem_rhs_codegen_<hash>.py`: key = network content +
   `inspect.getsource` of both emitters; temp file + `os.replace`; never pruned.
 - `parse_network` raises on within-section duplicates (`duplicates_ok=True`
@@ -715,8 +713,10 @@ Both kept for parity.
 
 ### Decided by the maintainer, not to be re-opened
 
-The geometry and element-budget certificate terms stay (2026-10-20, after both
-referees recommended it): the rule "keep VULCAN's original convergence criteria"
+The atom-conservation projection, the Ros2 stage repair, `DT_MAX_S`, the solar
+abundance file and the retry cap stay (2026-10-20, both referees keep them);
+batches B-D of the provenance audit are not owed. The geometry and element-budget
+certificate terms stay (2026-10-20, after both referees recommended it): the rule "keep VULCAN's original convergence criteria"
 keeps every VULCAN 2 test and allows extra tests that fix a confirmed defect; a
 relaxation of VULCAN's gate is never adopted.
 

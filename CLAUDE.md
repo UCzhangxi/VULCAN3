@@ -191,8 +191,8 @@ outer_loop.OuterLoop                       one JIT'd lax.while_loop
 - Every config declares `fastchem_solar_abundance_file`; match it before quoting
   a cross-code number (unmatched, composition dominates). The Lodders 2009 preset
   is not an agreement case with upstream's seed.
-- Earth and K2-18b were removed (neither converged here); re-add only with a
-  converging run (todo).
+- Earth and K2-18b are withdrawn; re-add one only with a run that certifies on
+  main (notes "Withdrawn configs").
 
 ## Output and tests
 
