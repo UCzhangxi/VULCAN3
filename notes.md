@@ -218,7 +218,15 @@ departures from VULCAN master".
   defect were kept; stopping on upstream's rule and reporting the two bits is worse
   than either. On W39b, relaxing the budget rescued nothing (vulcan-retrieval notes
   "Runs", failure_diag); geometry incidence is unmeasured (vulcan-forward's
-  `ConvDiag` carries no geometry field). The maintainer decides.
+  `ConvDiag` carries no geometry field). The outside reviewer, asked again at
+  `92c3b1e` with the records in hand, also keeps both: the geometry term fixes a
+  defect upstream shares (geometry refreshes only on the cadence, `op.py:904`, and
+  `stop()` accepts a stale one), introduced in `001082e`; the budget term, from
+  `46313d1`, polices the corrections the stage repair deliberately drops
+  (`c6fdf4e`), and a certifying W39b photo-off column still drifts 2.16e-3, so it
+  can bind. Both are extra primal stopping rules that can open likelihood holes,
+  so the owed measurement is their incidence at the first chemistry-qualified
+  candidate on a saved W39b batch.
 - Retry cap 110: keep (inert, above).
 - rtol 0.2, `conver_ignore` [], `count_max` 1e4 equal upstream's HD189 example (no
   `use_adapt_rtol` line there, above), not its root `vulcan_cfg.py` (0.25, adaptive,

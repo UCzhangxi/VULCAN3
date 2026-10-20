@@ -2,7 +2,7 @@
 
 Evidence for these items is in `notes.md` (this repo's, unless another repo is named).
 
-1. [decision] Confirm the departures from VULCAN master (two referees split on the geometry and element-budget certificate terms), schedule the measurements they ask for, and decide whether batches B-D of the provenance audit are owed.
+1. [decision] Confirm the departures from VULCAN master (both referees now recommend keeping the geometry and element-budget certificate terms), schedule the measurements they ask for, and decide whether batches B-D of the provenance audit are owed.
 2. [decision] Reply to the external user's report (draft exists in the maintainer's mail); items 3-5 wait on the files and logs it asks for.
 3. [bug?] The external user reports that Earth converges in VULCAN but not in vulcan3 with the same inputs.
 4. [bug?] The external user reports that vulcan3 runs differ from run to run on their machine.
