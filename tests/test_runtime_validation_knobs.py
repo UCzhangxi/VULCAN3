@@ -99,6 +99,7 @@ _NAN = float("nan")
 @pytest.mark.parametrize("bad", [
     dict(nz=2), dict(P_b=1e-3), dict(P_t=0.0), dict(Mp=_NAN), dict(Rp=-1.0),
     dict(rtol=float("inf")), dict(geom_conv_tol=0.0), dict(element_budget_tol=_NAN),
+    dict(element_budget_tol=-float("inf")),
     dict(dt_min=1e16), dict(sl_angle=58.0), dict(humidity=50.0),
     *(dict(**{k: v}) for k in ("count_min", "batch_max_retries",
                                "ini_update_photo_frq", "final_update_photo_frq")
@@ -110,4 +111,7 @@ def test_silently_wrong_values_are_refused(bad):
     from vulcan3.runtime_validation import _validate_numerical_bounds
 
     assert _validate_numerical_bounds(SimpleNamespace(**_VALID)) == []
+    # .inf is the budget term's documented off switch.
+    off = SimpleNamespace(**{**_VALID, "element_budget_tol": float("inf")})
+    assert _validate_numerical_bounds(off) == []
     assert len(_validate_numerical_bounds(SimpleNamespace(**{**_VALID, **bad}))) == 1

@@ -177,7 +177,9 @@ def _validate_numerical_bounds(cfg) -> list[str]:
     # A NaN fails no `<= 0` test; gravity is G*Mp/Rp**2.
     for key in _FINITE_POSITIVE:
         v = _declared(cfg, key)
-        if v is None or not (math.isfinite(v) and v > 0.0):
+        # element_budget_tol .inf switches the budget term off (open columns).
+        off = key == "element_budget_tol" and v == math.inf
+        if v is None or not ((math.isfinite(v) or off) and v > 0.0):
             errors.append(f"{key}={v} must be declared, finite and > 0.")
     dt_min, dt_max = _declared(cfg, "dt_min"), _declared(cfg, "dt_max")
     if None not in (dt_min, dt_max) and not dt_min < dt_max:

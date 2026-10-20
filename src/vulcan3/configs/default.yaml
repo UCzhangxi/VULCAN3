@@ -176,7 +176,8 @@ geom_conv_tol: 1.0e-3
 # Certificate term with no VULCAN 2 counterpart: end only if every element's
 # operator-weighted column, relative to H, is within this of its t=0 value;
 # loss_eps bounds only the per-step change. It assumes a closed column:
-# boundary fluxes and bottom or fix_species pins count as drift.
+# boundary fluxes and bottom or fix_species pins count as drift; for such a
+# column, .inf switches the term off.
 element_budget_tol: 1.0e-2
 # The pinned HD189 example's [] (cfg_examples/vulcan_cfg_HD189.py:148).
 conver_ignore: []

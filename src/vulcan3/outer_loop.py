@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import functools
 import logging
+import math
 from typing import NamedTuple, Optional
 
 import numpy as np
@@ -84,8 +85,8 @@ _SLOPE_MIN_FLOOR = 1e-10
 
 # A longdy counts as a new plateau minimum only below this fraction of the
 # running minimum (a 5% drop), so ULP-level jitter cannot reset
-# `count_since_new_min`. Hand-picked, JAX-only; vulcan-forward's ConvDiag
-# reads the counter.
+# `count_since_new_min`. Hand-picked, JAX-only; the counter is a diagnostic
+# that feeds no stopping rule.
 _PLATEAU_NEW_MIN_FRAC = 0.95
 
 # Hybrid vm_mol phase-flip budget, vm_branch@84d010d stop(): count_min =
@@ -752,6 +753,35 @@ def conv_normal(final: JaxIntegState, cfg):
     tight, _ = _branches(final.longdy, final.longdydt, _slope_min(final), cfg)
     branch = jnp.where(ok, jnp.where(tight, jnp.int32(1), jnp.int32(2)), jnp.int32(0))
     return ok, branch
+
+
+def certificate_failures(final: JaxIntegState, cfg, atom_order):
+    """`(term, value, threshold)` for each certificate term the exit carry
+    fails; empty when `conv_normal` holds.
+
+    `budget_ok` / `geom_ok` are written only on a candidate step, so the
+    budget is read from `budget_drift` (updated every accepted step), and
+    geometry, which keeps no residual, is named (value nan) only when every
+    other term passes.
+    """
+    slope_min = _slope_min(final)
+    tight, loose = _branches(final.longdy, final.longdydt, slope_min, cfg)
+    out = []
+    if not bool(tight | loose):
+        if not float(final.longdy) < float(cfg.yconv_min):
+            out.append(("long dy", float(final.longdy), float(cfg.yconv_min)))
+        else:
+            out.append(("long dy/dt", float(final.longdydt), float(slope_min)))
+    if not float(final.aflux_change) < float(cfg.flux_cri):
+        out.append(("actinic flux change", float(final.aflux_change), float(cfg.flux_cri)))
+    drift = np.abs(np.asarray(final.budget_drift))
+    i = int(np.argmax(drift))
+    if not drift[i] < float(cfg.element_budget_tol):
+        out.append((f"element budget {atom_order[i]}/H", float(drift[i]),
+                    float(cfg.element_budget_tol)))
+    if not out and not bool(final.geom_ok):
+        out.append(("geometry", float("nan"), float(cfg.geom_conv_tol)))
+    return out
 
 
 def _make_runner(
@@ -3173,10 +3203,11 @@ class OuterLoop:
             return TERM_CONVERGED
         return TERM_NONFINITE
 
-    def _report_end(self, rs) -> None:
+    def _report_end(self, rs, final) -> None:
         """End-of-run report (op.py:1069-1085 and op.stop): print_prog,
         then print_end_msg (end_case 1) or print_unconverged_msg, which
-        states the reason (2 / 3 / 5).
+        states the reason (2 / 3 / 5), followed by the certificate terms the
+        exit carry `final` fails.
         """
         var, _, para = _state_mod.legacy_view(rs)
         end_case = para.end_case
@@ -3190,8 +3221,19 @@ class OuterLoop:
             self.output.print_prog(var, para)
         if end_case == TERM_CONVERGED:
             self.output.print_end_msg(var, para)
-        else:
-            self.output.print_unconverged_msg(var, para, end_case)
+            return
+        self.output.print_unconverged_msg(var, para, end_case)
+        failing = certificate_failures(final, self._cfg, self._atom_order)
+        if failing:
+            logger.warning("Convergence terms not met at exit: " + "; ".join(
+                f"{term} {value:.3g} (threshold {threshold:.3g})"
+                if math.isfinite(value) else f"{term} (threshold {threshold:.3g})"
+                for term, value, threshold in failing))
+        if any(term.startswith("element budget") for term, _, _ in failing):
+            logger.warning(
+                "The element budget assumes a closed column: boundary fluxes and "
+                "bottom or fix_species pins count as drift. For such a column set "
+                "element_budget_tol: .inf to stop on VULCAN 2's criteria.")
 
     def __call__(self, rs, chunk=None):
         """Integrate a fresh `RunState` (`params.count == 0`) to convergence
@@ -3217,17 +3259,18 @@ class OuterLoop:
         self.interrupted_runstate = None
         init_state, atm_static = self.prepare_runstate(rs)
         if chunk is None:
-            rs_out = self._unpack_state_to_runstate(
-                self._runner(init_state, atm_static), rs)
+            final = self._runner(init_state, atm_static)
         else:
-            rs_out = self._run_chunked(init_state, atm_static, rs, int(chunk))
-        self._report_end(rs_out)
+            final = self._run_chunked(init_state, atm_static, rs, int(chunk))
+        rs_out = self._unpack_state_to_runstate(final, rs)
+        self._report_end(rs_out, final)
         return rs_out
 
     def _run_chunked(self, state, atm_static, rs, chunk):
         """Drive `runner_chunk` until a chunk ends short of its target, which
         only a real termination does (a run that ends exactly on a target
-        returns from the next call after zero iterations)."""
+        returns from the next call after zero iterations). Returns the final
+        carry."""
         import types
 
         if chunk < 1:
@@ -3241,7 +3284,7 @@ class OuterLoop:
                 done = int(nxt.accept_count) < target
                 state = nxt
                 if done:
-                    return self._unpack_state_to_runstate(state, rs)
+                    return state
                 if self._cfg.use_print_prog:
                     # print_prog reads only these fields.
                     self.output.print_prog(

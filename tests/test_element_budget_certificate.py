@@ -105,6 +105,9 @@ def test_certificate_requires_the_column_element_budget(drain, scale, reason, wh
     # is opened.
     ok, branch = vulcan3.conv_normal(final, c)
     assert (bool(ok), int(branch)) == ((True, 1) if reason == 1 else (False, 0))
+    # The unconverged exit names the term that held it, and only that one.
+    failing = outer_loop.certificate_failures(final, c, integ._atom_order)
+    assert [t for t, _, _ in failing] == ([] if reason == 1 else ["element budget C/H"])
 
 
 @pytest.mark.parametrize(
