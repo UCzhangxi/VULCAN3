@@ -592,7 +592,7 @@ out_npz = Path(sys.argv[2])
 # the first `import vulcan3`, which is why the JAX side needs a cold process.
 os.environ["VULCAN3_NETWORK"] = %(network)r
 os.environ["VULCAN3_ATOM_LIST"] = "H,O,C"
-os.environ["JAX_PLATFORM_NAME"] = "cpu"
+os.environ["JAX_PLATFORMS"] = "cpu"
 sys.path.insert(0, str(package_root.parent))
 os.chdir(package_root)
 

@@ -179,7 +179,7 @@ def run_child(child_src: str, *, network: str, label: str, timeout: int = 600):
     """
     env = {
         **os.environ,
-        "JAX_PLATFORM_NAME": "cpu",
+        "JAX_PLATFORMS": "cpu",
         "VULCAN3_NETWORK": network,
     }
     res = subprocess.run(

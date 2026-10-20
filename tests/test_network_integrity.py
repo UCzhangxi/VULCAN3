@@ -254,7 +254,7 @@ def test_shipped_profile_temp_range_exposure_is_pinned(cfg_name):
 def test_network_species_without_composition_row_refuse():
     child = (
         "import os, sys, warnings; warnings.filterwarnings('ignore');"
-        "os.environ['JAX_PLATFORM_NAME']='cpu';"
+        "os.environ['JAX_PLATFORMS']='cpu';"
         "os.environ['VULCAN3_NETWORK']='thermo/SNCHO_photo_network_C3.txt';"
         "os.environ['VULCAN3_ATOM_LIST']='H,O,C,N,S';"
         f"sys.path.insert(0, {str(ROOT / 'src')!r});"

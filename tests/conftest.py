@@ -18,6 +18,10 @@ from typing import Any
 
 import pytest
 
+# Tests run on CPU unless the caller sets JAX_PLATFORMS: on a GPU host the
+# CUDA plugin would otherwise open every visible card in each worker.
+os.environ.setdefault("JAX_PLATFORMS", "cpu")
+
 ROOT = Path(__file__).resolve().parent.parent
 
 # Many tests assume cwd == ROOT for relative data paths.
