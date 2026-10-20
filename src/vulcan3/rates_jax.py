@@ -28,9 +28,9 @@ from .network import Network, parse_network
 _SPECIAL_OH_CH3 = "OH + CH3 + M -> CH3OH + M"
 
 # Clip on the Gibbs exponent before exp() in K_eq_array, just under the
-# largest finite float64 exp() argument (log(finfo.max) = 709.78). Clipping
-# only replaces an overflow (k_rev = 0 either way) and keeps the jvp of
-# k_fwd/K off inf/inf = NaN on cold columns.
+# largest finite float64 exp() argument (log(finfo.max) = 709.78). A clipped K
+# is finite, so k_rev = k_fwd/K is tiny but positive where an overflow would
+# give 0; the clip keeps the jvp of k_fwd/K off inf/inf = NaN on cold columns.
 _EXP_ARG_MAX = 709.0
 
 # Moses+2005 low-T rate caps, master's lim_lowT_rates (exoclime@80f75b9

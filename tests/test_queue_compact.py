@@ -328,8 +328,8 @@ def _unconditional_copies_per_loop(text):
 
 @pytest.mark.skipif(jax.default_backend() != "cpu", reason=(
     "CPU pin: at these tiny widths the GPU compiler turns the refill cond into "
-    "selects, so every loop of the GPU program copies the ring; the GPU pin is the "
-    "production-shape census (analysis/speed2_small, job 93454)"))
+    "selects, so every loop of the GPU program copies the ring; the GPU check "
+    "needs a production-shape program, which this suite does not build"))
 def test_tail_loops_do_not_copy_the_lane_carry():
     from test_vmap_photo_batch import _pin_cfg as _photo_cfg
 

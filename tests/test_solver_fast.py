@@ -38,7 +38,7 @@ if os.environ.get("VULCAN3_SOLVER") == "reference":
     )
 
 from _helpers import load_adj_state
-from _oracles import block_thomas_diag_offdiag
+from _oracles import banded_solve, block_thomas_diag_offdiag
 
 import vulcan3.solver_fast as fast_mod
 
@@ -111,33 +111,6 @@ def _system(nz, ni, seed, boost, scale):
         jnp.asarray(rng.standard_normal((nz - 1, ni)) * scale),
         jnp.asarray(rng.standard_normal((nz, ni))),
     )
-
-
-def banded_solve(diag, sup, sub, b):
-    """A BACKWARD-STABLE solve of the block-tridiagonal system (LAPACK gbsv).
-
-    The yardstick the tangent and cotangent bars in `check_real_blocks` are
-    read against; `compare` runs it on the same linearised right-hand side
-    and the same cotangent seed as the two arms. The system is assembled banded (kl = ku = 2*ni-1) rather
-    than dense: n = nz*ni is 10350 here, so the dense matrix would be 857 MB
-    while the band is 34 MB. Pass the transposed operands for `A^T g = w`.
-    """
-    import scipy.linalg
-
-    diag, sup, sub = np.asarray(diag), np.asarray(sup), np.asarray(sub)
-    nz, ni = diag.shape[0], diag.shape[1]
-    n, kl = nz * ni, 2 * ni - 1
-    ab = np.zeros((2 * kl + 1, n))
-    rows = np.arange(ni)
-    for z in range(nz):
-        r, c = z * ni + rows[:, None], z * ni + rows[None, :]
-        ab[kl + r - c, c] = diag[z]
-        if z + 1 < nz:
-            r1, c1 = z * ni + rows, (z + 1) * ni + rows
-            ab[kl + r1 - c1, c1] = sup[z]
-            ab[kl + c1 - r1, r1] = sub[z]
-    x = scipy.linalg.solve_banded((kl, kl), ab, np.asarray(b).reshape(n))
-    return jnp.asarray(x.reshape(nz, ni))
 
 
 def compare(diag, sup, sub, rhs, tans, seed=1):

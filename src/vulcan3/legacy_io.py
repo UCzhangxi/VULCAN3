@@ -22,13 +22,38 @@ import warnings
 from .config import default_config
 from . import chem_funs
 from .chem_funs import ni, nr
-from .live_ui import master_tableau20
 from .state import TERM_NONFINITE, TERM_RUNTIME, TERM_STEP_COUNT
 
 logger = logging.getLogger(__name__)
 
 _CFG = default_config()
 species = chem_funs.spec_list
+
+# VULCAN-master's Tableau 20 palette (0-255). Published 0-1 normalized in the
+# .vul `parameter` dict (`para.tableau20`) as master publishes it
+# (store.py:203-209), so the values are a compatibility contract.
+_TABLEAU20_RGB255 = [
+    (31, 119, 180),
+    (255, 127, 14),
+    (44, 160, 44),
+    (214, 39, 40),
+    (148, 103, 189),
+    (140, 86, 75),
+    (227, 119, 194),
+    (127, 127, 127),
+    (188, 189, 34),
+    (23, 190, 207),
+    (174, 199, 232),
+    (255, 187, 120),
+    (152, 223, 138),
+    (255, 152, 150),
+    (197, 176, 213),
+    (196, 156, 148),
+    (247, 182, 210),
+    (199, 199, 199),
+    (219, 219, 141),
+    (158, 218, 229),
+]
 
 
 def _warn_stale_reaction_ids(
@@ -399,9 +424,10 @@ def _synthesize_save_dicts(runstate, cfg):
         )
         para_save["pic_count"] = int(p.pic_count)
         para_save["fix_species_start"] = bool(p.fix_species_start)
-    # Plotting-only master field. Runtime values live in live_ui, but the
-    # public .vul schema should still expose the same parameter key.
-    para_save["tableau20"] = master_tableau20()
+    # Plotting-only master field, kept so the public .vul schema matches.
+    para_save["tableau20"] = [
+        (r / 255.0, g / 255.0, b / 255.0) for r, g, b in _TABLEAU20_RGB255
+    ]
     if md is not None:
         para_save["start_time"] = float(md.start_time)
 
@@ -427,12 +453,12 @@ class Output(object):
             )
 
     def print_prog(self, var, para):
-        """Print one progress block (the config asked for it: `use_print_prog`): elapsed model time, step count vs
+        """Log one progress block (the config asked for it: `use_print_prog`): elapsed model time, step count vs
         `count_max`, longdy / longdy_dt / dt, and the most-varying
         (level, species).
         """
         indx_max = np.nanargmax(para.where_varies_most)
-        print(
+        logger.info(
             "Elapsed time: "
             + "{:.2e}".format(var.t)
             + " || Step number: "
@@ -440,7 +466,7 @@ class Output(object):
             + "/"
             + str(self._cfg.count_max)
         )
-        print(
+        logger.info(
             "longdy = "
             + "{:.2e}".format(var.longdy)
             + "      || longdy/dt = "
@@ -448,8 +474,8 @@ class Output(object):
             + "  || dt = "
             + "{:.2e}".format(var.dt)
         )
-        print("from nz = " + str(int(indx_max / ni)) + " and " + species[indx_max % ni])
-        print(
+        logger.info("from nz = " + str(int(indx_max / ni)) + " and " + species[indx_max % ni])
+        logger.info(
             "------------------------------------------------------------------------"
         )
 

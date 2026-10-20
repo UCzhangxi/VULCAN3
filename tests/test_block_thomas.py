@@ -1,7 +1,9 @@
 """Validate the block-tridiagonal solvers.
 
 Chain of oracles: `block_thomas` (dense off-diagonals) against a direct
-np.linalg.solve on the assembled dense matrix, then the production
+solve (np.linalg.solve on the assembled dense matrix for the small system,
+LAPACK's banded `banded_solve` at the VULCAN shape, where the dense matrix
+would be 0.93 GiB), then the production
 `block_thomas_diag_offdiag` (diagonal-in-species off-diagonals, the O(ni^2)
 rank update) against `block_thomas` on the same systems. Two sizes: a small
 random system and the VULCAN-JAX shape (nz=120, ni=93) with Rosenbrock-like
@@ -13,7 +15,7 @@ from __future__ import annotations
 import jax.numpy as jnp
 import numpy as np
 import pytest
-from _oracles import block_thomas, block_thomas_diag_offdiag
+from _oracles import banded_solve, block_thomas, block_thomas_diag_offdiag
 
 X_FLOOR = 1e-12  # denominator floor for near-zero solution entries
 
@@ -38,7 +40,7 @@ def _promote_diags(diag, sup_d, sub_d):
     return sup, sub
 
 
-# (nz, ni, diag boost, offdiag scale, dense-vs-numpy tol, diag-vs-dense tol).
+# (nz, ni, diag boost, offdiag scale, dense-vs-direct tol, diag-vs-dense tol).
 # The looser large-system tolerances are float-cancellation noise in the LU
 # reduction order; the paths are algebraically equivalent.
 _CASES = {
@@ -59,9 +61,12 @@ def test_block_thomas_solvers_agree_with_dense_solve(case):
     diag, rhs = jnp.asarray(diag_np), jnp.asarray(rhs_np)
     sup, sub = _promote_diags(diag, jnp.asarray(sup_d), jnp.asarray(sub_d))
 
-    x_ref = np.linalg.solve(_dense_from_blocks(diag_np, np.asarray(sup),
-                                               np.asarray(sub)),
-                            rhs_np.reshape(-1)).reshape(nz, ni)
+    if case == "small":
+        x_ref = np.linalg.solve(_dense_from_blocks(diag_np, np.asarray(sup),
+                                                   np.asarray(sub)),
+                                rhs_np.reshape(-1)).reshape(nz, ni)
+    else:
+        x_ref = np.asarray(banded_solve(diag_np, sup_d, sub_d, rhs_np))
     x_dense = np.asarray(block_thomas(diag, sup, sub, rhs))
     x_diag = np.asarray(block_thomas_diag_offdiag(
         diag, jnp.asarray(sup_d), jnp.asarray(sub_d), rhs))
@@ -70,5 +75,5 @@ def test_block_thomas_solvers_agree_with_dense_solve(case):
                        / np.maximum(np.abs(x_ref), X_FLOOR))
     err_diag = np.max(np.abs(x_diag - x_dense)
                       / np.maximum(np.abs(x_dense), X_FLOOR))
-    assert err_dense < tol_dense, f"dense vs numpy: {err_dense:.3e}"
+    assert err_dense < tol_dense, f"dense vs direct: {err_dense:.3e}"
     assert err_diag < tol_diag, f"diag vs dense: {err_diag:.3e}"

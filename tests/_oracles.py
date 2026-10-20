@@ -10,7 +10,8 @@
 - `block_thomas`: the dense-off-block Thomas solve on
   `jax.scipy.linalg.lu_factor` / `lu_solve`, independent of the production
   `lax.linalg.lu` path; `block_thomas_diag_offdiag`: the production
-  factor/solve pair in one call.
+  factor/solve pair in one call; `banded_solve`: LAPACK's banded solve of
+  the same system with diagonal off-blocks, the backward-stable yardstick.
 - `stage_defects`: each Ros2 stage vector's element-identity defect and the
   bound the stage repair leaves it under.
 """
@@ -186,6 +187,32 @@ def block_thomas(diag, sup, sub, rhs):
     _, k_head = jax.lax.scan(bwd_step, k_last, bwd_inputs, reverse=True)
 
     return jnp.concatenate([k_head, k_last[None]], axis=0)
+
+
+def banded_solve(diag, sup, sub, b):
+    """A BACKWARD-STABLE solve of the block-tridiagonal system (LAPACK gbsv).
+
+    Shapes: diag (nz, ni, ni), sup/sub (nz-1, ni), b (nz, ni) -> (nz, ni).
+    The system is assembled banded (kl = ku = 2*ni-1) rather than dense: at
+    nz*ni ~ 1e4 the dense matrix would be ~0.9 GB while the band is ~34 MB.
+    Pass the transposed operands for `A^T g = w`.
+    """
+    import scipy.linalg
+
+    diag, sup, sub = np.asarray(diag), np.asarray(sup), np.asarray(sub)
+    nz, ni = diag.shape[0], diag.shape[1]
+    n, kl = nz * ni, 2 * ni - 1
+    ab = np.zeros((2 * kl + 1, n))
+    rows = np.arange(ni)
+    for z in range(nz):
+        r, c = z * ni + rows[:, None], z * ni + rows[None, :]
+        ab[kl + r - c, c] = diag[z]
+        if z + 1 < nz:
+            r1, c1 = z * ni + rows, (z + 1) * ni + rows
+            ab[kl + r1 - c1, c1] = sup[z]
+            ab[kl + c1 - r1, r1] = sub[z]
+    x = scipy.linalg.solve_banded((kl, kl), ab, np.asarray(b).reshape(n))
+    return jnp.asarray(x.reshape(nz, ni))
 
 
 def stage_defects(y, k_arr, dt, atm, net):

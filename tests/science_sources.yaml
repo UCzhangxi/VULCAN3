@@ -218,9 +218,9 @@ intentional_divergences:
       The pinned vulcan2_ncho copy pads 133.75-181.55 nm with 464 zero-flux
       rows that bin into the FUV photolysis drive as real zeros.
       Upstream's regeneration (bb9255b1) deletes them and lowers every flux by
-      a constant 1.392; the wavelength grid is otherwise identical. The builder
-      in tools/data_prep/ (47.5 ly / 0.2064 r_sun) reproduces the
-      pre-regeneration normalisation.
+      a constant 1.392; the wavelength grid is otherwise identical. Upstream's
+      builder (atm/stellar_flux/read_muscles_spectra_in_nm.py:38, 47.5 ly /
+      0.2064 r_sun) reproduces the pre-regeneration normalisation.
     recorded_in: supported_inputs sha256 pin (this file)
 
   fastchem_ps_order:

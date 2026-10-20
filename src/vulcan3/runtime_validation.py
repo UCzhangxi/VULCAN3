@@ -192,6 +192,8 @@ def _validate_numerical_bounds(cfg) -> list[str]:
     rtol = _declared(cfg, "rtol")
     rtol_min = _declared(cfg, "rtol_min")
     rtol_max = _declared(cfg, "rtol_max")
+    if rtol is not None and not (math.isfinite(rtol) and rtol > 0.0):
+        errors.append(f"rtol={rtol} must be finite and > 0 (step-acceptance tolerance).")
     if None not in (rtol_min, rtol_max) and not (rtol_min <= rtol_max):
         errors.append(f"rtol_min={rtol_min} must be <= rtol_max={rtol_max}.")
     if use_adapt and None not in (rtol, rtol_min, rtol_max) \
@@ -249,17 +251,18 @@ def _validate_numerical_bounds(cfg) -> list[str]:
             f"loss_ex={loss_ex} contains entries not in atom_list={atom_list}: {extras}."
         )
 
-    # Gravity is derived from Mp + Rp (g = G*Mp/Rp^2); both must be positive.
+    # Gravity is derived from Mp + Rp (g = G*Mp/Rp^2); both must be finite and
+    # positive (a NaN fails no `<= 0` test).
     Mp = _declared(cfg, "Mp")
     Rp = _declared(cfg, "Rp")
-    if Mp is None or Mp <= 0.0:
+    if Mp is None or not (math.isfinite(Mp) and Mp > 0.0):
         errors.append(
-            f"Mp={'not declared' if Mp is None else Mp} must be set and > 0 "
+            f"Mp={'not declared' if Mp is None else Mp} must be set, finite and > 0 "
             f"(planet mass, g) to derive gs = G*Mp/Rp^2."
         )
-    if Rp is None or Rp <= 0.0:
+    if Rp is None or not (math.isfinite(Rp) and Rp > 0.0):
         errors.append(
-            f"Rp={'not declared' if Rp is None else Rp} must be set and > 0 "
+            f"Rp={'not declared' if Rp is None else Rp} must be set, finite and > 0 "
             f"(planet radius, cm) to derive gs."
         )
 

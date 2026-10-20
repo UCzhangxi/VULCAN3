@@ -1,4 +1,4 @@
-"""Validate chem_jac_analytical_per_layer against the jacrev-based dense
+"""Validate chem_jac_analytical against the jacrev-based dense
 Jacobian on the HD189 reference state.
 
 The analytical Jacobian is built from stoichiometry directly:

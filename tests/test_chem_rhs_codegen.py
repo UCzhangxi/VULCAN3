@@ -2,6 +2,7 @@
 (master-faithful term order, NumPy float64): rtol=1e-5 on significant cells.
 The threshold absorbs XLA FMA fusion vs NumPy `*`-chains; actual worst-cell
 agreement is ~2e-13. The comparison with master's `chemdf` is test_chem.py.
+The grouped RHS (`VULCAN3_CHEM_RHS=grouped`) must equal the codegen bitwise.
 
 The (y, M, k) state is captured fresh from `RunState.with_pre_loop_setup`.
 """
@@ -308,3 +309,30 @@ def test_codegen_matches_numpy_oracle(hd189_state):
         f"at layer {idx[0]} species {net.species[idx[1]]} (threshold {CODEGEN_RTOL:g})"
     )
 
+
+
+@pytest.mark.parametrize("n_lanes", [0, 8], ids=["solo", "vmap8"])
+def test_grouped_rhs_is_bitwise_codegen(hd189_state, monkeypatch, n_lanes):
+    """`VULCAN3_CHEM_RHS=grouped` evaluates the codegen's operation trees as
+    vectorised gathers, so it must equal the codegen RHS bit for bit, solo and
+    under a lane vmap of perturbed columns (the batched runner's shape)."""
+    import jax
+    import jax.numpy as jnp
+    import vulcan3.make_chem_funs as mcf
+    import vulcan3.network as net_mod
+    from vulcan3.config import default_config
+
+    monkeypatch.setattr(mcf, "CHEM_RHS_IMPL", "codegen")  # whatever the env selects
+    net = net_mod.parse_network(default_config().network)
+    y = np.asarray(hd189_state.var.y, dtype=np.float64)
+    M = np.asarray(hd189_state.atm.M, dtype=np.float64)
+    k = np.asarray(hd189_state.var.k_arr, dtype=np.float64)
+    codegen, grouped = mcf.build_chem_rhs(net), mcf.build_chem_rhs_grouped(net)
+    if n_lanes:
+        rng = np.random.default_rng(0)
+        y = y * np.exp(rng.uniform(-1.0, 1.0, (n_lanes, *y.shape)))
+        M = np.broadcast_to(M, (n_lanes, *M.shape))
+        k = np.broadcast_to(k, (n_lanes, *k.shape))
+        codegen, grouped = jax.vmap(codegen), jax.vmap(grouped)
+    args = tuple(jnp.asarray(a) for a in (y, M, k))
+    assert np.array_equal(np.asarray(codegen(*args)), np.asarray(grouped(*args)))
