@@ -2,18 +2,19 @@
 
 Evidence for these items is in `notes.md` (this repo's, unless another repo is named).
 
-1. [decision] Confirm the departures from VULCAN master whose provenance is not recorded, and decide whether batches B-D of the provenance audit are owed.
+1. [decision] Confirm the departures from VULCAN master (two referees split on the geometry and element-budget certificate terms), schedule the measurements they ask for, and decide whether batches B-D of the provenance audit are owed.
 2. [decision] Reply to the external user's report (draft exists in the maintainer's mail); items 3-5 wait on the files and logs it asks for.
 3. [bug?] The external user reports that Earth converges in VULCAN but not in vulcan3 with the same inputs.
 4. [bug?] The external user reports that vulcan3 runs differ from run to run on their machine.
 5. [unverified] The external user reports that K2-18b (H2O clouds) converges in < 4000 steps; re-add it once it converges on main.
 6. [decision] Claim `vulcan3` on PyPI: the README installs put TestPyPI first, so a TestPyPI package can shadow its PyPI namesake.
+7. [robustness] The CUDA block-Thomas solve multiplies by 1/pivot with no division fallback, and the FFI build stamp ignores the CUDA arch and toolchain; both need a GPU host with nvcc (NAS) to change and test.
 
 ## 1. Confirm the departures from VULCAN master
 
-Evidence: notes "Differences from VULCAN master" (the items marked "provenance not
-recorded"). vulcan-retrieval's todo checks them against the rule "keep VULCAN's
-original convergence criteria"; all are live on main and in every production run:
+Evidence: notes "Differences from VULCAN master" (each item, its provenance and the
+referee verdicts) and "Solver conditioning". All are live on main and in every
+production run:
 - the atom-conservation projection of the chemistry RHS and Jacobian
   (`jax_step._project_chem_rhs` / `_project_chem_jac`, from ccc40f7);
 - the Ros2 stage repair (`jax_step._repair_stage`) and `config.DT_MAX_S`;
@@ -21,11 +22,39 @@ original convergence criteria"; all are live on main and in every production run
   `element_budget_tol` (C21, C23);
 - the FastChem solar abundance file swap (ccc40f7);
 - the retry cap with force-accept (`batch_max_retries` 110).
+
+Verdicts: both referees keep the projection, the stage repair, `DT_MAX_S`, the
+abundance file and the retry cap. They split on the two certificate terms: the
+outside review would demote them to diagnostics under the rule "keep VULCAN's
+original convergence criteria"; the second referee keeps them (tightenings that fix
+a confirmed defect stay, relaxations were dropped), rejects the middle path, and
+notes that keeping them keeps baseline v4 comparable with v2. That reading of the
+rule is the maintainer's to confirm.
+
+Owed measurements (none blocks the v4 launch):
+- Certificate-term A/B, no code change: ~50 v2 posterior draws (include lnKzz <
+  -0.7), cold at nz 100, with and without `cfg_overrides` `geom_conv_tol: 1e9` and
+  `element_budget_tol: 1e9` (both pass `vulcan3.validate_overrides`). In
+  vulcan-retrieval an override file's `cfg_overrides` replaces the case's dict, so
+  restate its other keys (Rp, rtol, photolysis cadence). Compare certified set,
+  accept counts, `budget_drift_max` and binned depth in sigma.
+- Stage repair on/off: ~20 v2 posterior draws cold, with `_repair_stage`
+  monkeypatched to identity (not `_CHEM_PROJECTION_ENABLED`, which also turns off the
+  projection); compare certified set, budget drift and depth in sigma, and record a
+  |correction|/carrier histogram from the same runs. Both referees ask for this one.
+- Projection on/off on real columns.
+- A `dt_max` sweep 1e11..1e17 on difficult saved columns (above 1e15 needs
+  `config.DT_MAX_S` raised in a scratch copy; a larger `dt_max` raises).
+- Photolysis cadence: W39b 5/5 and the batched shared-tick cadence against cadence 1.
+- Block-local pivoting: real large-dt stage matrices against LAPACK banded LU
+  (`tests/_oracles.banded_solve`).
+
 The audit covered batch A only (e46234a..7eda1af, 60 commits); the later 328
-commits (batches B-D) were not audited. vulcan-forward's `conv_normal` terms and
-per-theta re-anchoring are the same question on the consumer side (vulcan-retrieval
-todo, "Confirm"). Done when each item is confirmed or scheduled for removal, and
-the B-D audit is either done or declined.
+commits (batches B-D) were not audited. vulcan-forward's `conv_normal` and its
+per-theta re-anchoring are the same question on the consumer side (vulcan-forward
+todo, "conv_normal certificate terms"). Done when each item is confirmed or
+scheduled for removal, the certificate-term decision is in notes "Design records",
+and the B-D audit is done or declined.
 
 ## 2. Reply to the external user
 
@@ -83,3 +112,21 @@ on PyPI would let the READMEs drop the TestPyPI index. The 0.18.0 TestPyPI relea
 and its tag were made in a session whose record is not on daw; vulcan-retrieval's
 todo lists confirming them. Done when the name is claimed (and, if decided, the
 packages are published).
+
+## 7. CUDA solve reciprocal and the FFI build stamp
+
+- Solve: `bt_lu_solve_warp0` (`csrc/block_thomas_cuda.cu`) takes `1.0 / u_ii` and
+  multiplies, with no fallback; the kernel's own comment says a pivot below 2^-1024
+  in magnitude gives inf/nan (1 / 1e-310 overflows where `t_i / u_ii` can be
+  finite). The Gauss-Jordan factor already divides when `bt_div_by_rcp`'s range is
+  left; the solve does not. No production solve is known to reach such a pivot
+  (notes "Solver conditioning").
+- Build stamp: `solver_fast._source_hash` covers the kernel source and
+  `block_thomas_common.h` only. The `-arch` from `_nvcc_arch` and the nvcc version
+  are not in it, so a library built for another arch or toolchain counts as
+  current and is not rebuilt.
+- nvcc is not on daw: change and test on NAS. Gates: the `ffi` tests in
+  `tests/test_solver_fast.py`, and bitwise equality with the current kernel at the
+  production shape (pivots in range).
+- Done means: the solve divides outside the reciprocal's safe range (bitwise
+  unchanged inside it), and the stamp covers the arch and the nvcc version.
