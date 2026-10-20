@@ -169,12 +169,12 @@ Inputs and data
   species, and at solar upstream FastChem's SiO and Fe oxides bind up to ~17% of the O
   [I]; the ExoGibbs seed sees network elements only. Upstream's file is kept as
   `..._lodders2009.dat` with the P/S rows corrected (C12). For W39b the config's
-  `<X>_H` override the file (`ini_abun._base_vector`), so only He comes from it.
-  A row-order bug left carbon atomic for EQ-initialised runs from about 05-07 to
-  06-08 (fixed 45cc4c7). Provenance not recorded.
-- EQ seed: ExoGibbs's gas minimizer on the port's NASA-9 data, not FastChem.
-  Reason: one thermochemical dataset shared with the reverse rates; no FastChem
-  build (no aarch64 wheel).
+  `<X>_H` override the file (`ini_abun._base_vector`), so only He comes from it. A row-order
+  bug left EQ runs' carbon atomic about 05-07 to 06-08 (fixed 45cc4c7). Provenance not recorded.
+- EQ seed: ExoGibbs on the port's NASA-9 data, not FastChem (one dataset with the
+  reverse rates; no aarch64 FastChem). On identical inputs it matches upstream FastChem
+  to ~1e-6 dex (HO2 aside); seeded from either, HD189 and W39b keep 1495 / 1202 steps
+  and agree to <= 3e-3 dex, median 4e-5 [M]. The gap is upstream's input rounding.
 - Data corrections: C1 (= e841d77, SNCHO reaction 949 k0 1e-20 -> 1e-29, which
   upstream also fixed), C4, C5, C6, C7, C12, C14 (networks renumbered), C20 (both
   sides), P18.
