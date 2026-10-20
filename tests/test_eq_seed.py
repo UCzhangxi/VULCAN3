@@ -5,9 +5,10 @@ the NASA-9 polynomials of the reverse rates. Two things need proving:
 
 1. It is the same equilibrium. `test_seed_matches_upstream_fastchem` runs the
    pinned upstream VULCAN's own initializer on the same column with the same
-   elemental abundances and compares dex by dex. The two codes share no
-   algorithm, no species list and no thermochemical table, so the bar is the
-   measured agreement (see MAX_DEX below), not machine precision.
+   elemental abundances and compares dex by dex. Upstream's FastChem reads the
+   same NASA-9 polynomials (its HO2 row is older) but shares no algorithm and
+   no species list, so the bar is the measured agreement (see MAX_DEX below),
+   not machine precision.
 
 2. It is exact where it must be: element ratios, normalisation, excluded
    species, and the jit / vmap / jvp boundary. Those need no oracle.

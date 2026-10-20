@@ -1,8 +1,8 @@
 # FastChem element preset, the shipped default. C, N and O are upstream VULCAN's
 # Lodders 2009 values; S and He approximate Lodders 2019 Table 8 present-day
 # values. P, Si, Ti, V, Cl, K, Na, Mg, F, Ca and Fe are set to -3.0 because the
-# shipped NCHO/SNCHO networks have no species for them: at solar they would lock
-# oxygen into MgO/SiO2/FeO that the kinetics can never release.
+# shipped NCHO/SNCHO networks have no species for them: at solar, upstream's
+# FastChem seed would bind oxygen in SiO and Fe oxides the kinetics never release.
 # default/HD189/HD189_vulcan3 use these rows unchanged (use_solar=true).
 # HD209/W39b override network elements other than H (use_solar=false); helium
 # still comes from this file for their shipped atom lists.

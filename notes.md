@@ -165,9 +165,9 @@ Integrator
 
 Inputs and data
 - `thermo/solar_element_abundances.dat` replaced in ccc40f7, still the default:
-  He and S changed, P/Si/Ti/V/Cl/K/Na/Mg/F/Ca/Fe at -3.0. Reason: the shipped
-  networks have no Mg/Si/Fe species, and solar rocky elements lock ~24% of the O
-  into oxides the kinetics never release. Upstream's file is kept as
+  He and S changed, P/Si/Ti/V/Cl/K/Na/Mg/F/Ca/Fe at -3.0: the networks have no Mg/Si/Fe
+  species, and at solar upstream FastChem's SiO and Fe oxides bind up to ~17% of the O
+  [I]; the ExoGibbs seed sees network elements only. Upstream's file is kept as
   `..._lodders2009.dat` with the P/S rows corrected (C12). For W39b the config's
   `<X>_H` override the file (`ini_abun._base_vector`), so only He comes from it.
   A row-order bug left carbon atomic for EQ-initialised runs from about 05-07 to
@@ -348,8 +348,8 @@ Default NCHO network, 69 species, 878 reactions.
   flux) matches to 4.4e-16 per refresh; statics (Kzz, Dzz, alpha, ms, vz, vs, M,
   Tco, pico, sat tables, cross sections) have no in-loop writer on either side.
   Not covered: non-empty `T_cross_sp` or `ion_sp` runs.
-- Bars: the EQ seed bar is 3x the worst (both maxima HO2; the floor is FastChem's
-  own ~4.3e-5 dex convergence plus two thermochemical tables); W39b bulk species
+- Bars: the EQ seed bar is 3x the worst (both maxima HO2, whose FastChem row is older;
+  otherwise one NASA-9 dataset; floor ~4.3e-5 dex FastChem convergence); W39b bulk species
   get a 1e-5 RHS bar because a ~1e-4 floor once let the converged state drift
   0.25-0.49 dex; the HD209 projection cases assert the residual within 1e-12 of
   the summed magnitude of the terms it cancels (the raw residual is a compiler
