@@ -3,8 +3,8 @@
 Evidence for these items is in `notes.md` (this repo's, unless another repo is named).
 
 1. [decision] Confirm the remaining departures from VULCAN master (projection, stage repair, `DT_MAX_S`, abundance file, retry cap; both referees keep them), schedule the owed measurements, and decide whether batches B-D of the provenance audit are owed.
-2. [decision] Reply to the external user's report (draft exists in the maintainer's mail); items 3-5 wait on the files and logs it asks for.
-3. [bug?] The external user reports that Earth converges in VULCAN but not in vulcan3 with the same inputs.
+2. [decision] Reply to the external user's report of 2026-10-14 (not yet sent); items 3-5 wait on the files and logs it asks for.
+3. [bug?] The external user reports that Earth converges in VULCAN but not in vulcan3 with the same inputs (their 0.3.1 tree, which predates the element-budget term). On main that term also blocks Earth: it assumes a closed column.
 4. [bug?] The external user reports that vulcan3 runs differ from run to run on their machine.
 5. [unverified] The external user reports that K2-18b (H2O clouds) converges in < 4000 steps; re-add it once it converges on main.
 6. [decision] Claim `vulcan3` on PyPI: the README installs put TestPyPI first, so a TestPyPI package can shadow its PyPI namesake.
@@ -54,8 +54,7 @@ and the B-D audit is done or declined.
 
 ## 2. Reply to the external user
 
-A reply is drafted in the maintainer's mail, corrected to the shipped state; its
-time-zone and meeting-time placeholders are left for the maintainer. It asks for
+The reply should ask for
 `SNCHO_DMS_photo_network_2025.txt` and confirmation of the K2-18b atm file (item 5),
 the Earth YAML, atm/BC files and commands (item 3), the exact P error text, and the
 platform, jax version and two differing logs (item 4). Done when sent.
@@ -63,12 +62,34 @@ platform, jax version and two differing logs (item 4). Done when sent.
 ## 3. Earth: converges upstream, not here
 
 Evidence: notes "Withdrawn configs" (2000 matched steps only; a full-length run
-was never done) and "Do not retry" (the falsified cures). Waiting on the user's
-Earth inputs (item 2). Then run both codes to `count_max`: upstream from a
-disposable copy of the pinned clone (`.oracles/vulcan2_ncho/cfg_examples/vulcan_cfg_Earth.py`),
-vulcan3 with the converted YAML, `JAX_PLATFORMS=cpu vulcan3 -c <earth.yaml>` from a
-scratch directory. ~30-60 min each [E]; ask before running. Done when the cause is
-a confirmed defect (a "Parity ledger" entry) or the two codes agree.
+was never done) and "Do not retry" (the falsified cures).
+
+That record and the user's 0.3.1 tree both predate the element-budget term
+(0.9.0), so the term explains neither failure.
+
+On main the term is a second blocker [I]: upstream's Earth example opens the
+column (`use_botflux`, `use_fix_sp_bot` for H2O and CO2, `fix_species`;
+`vulcan_cfg_Earth.py:98-99,117` in the pinned clone), and the recorded Earth run
+gained H (`atom_loss[H] = 2.98e3`, notes "Withdrawn configs"). The term reads
+each element relative to H, so that inflow shows as a drift near -1 in every
+other element (tolerance 1e-2). Such a run cannot certify even if its chemistry
+has converged, and it exits as "Maximal allowed steps exceeded" without naming
+the term. Upstream has no such term.
+
+Runs, all to `count_max` (~30-60 min each [E]; ask before running): upstream
+from a disposable copy of the pinned clone (it needs the C13 fix and four
+missing keys to start, notes "Withdrawn configs"); vulcan3 with the converted
+YAML, `JAX_PLATFORMS=cpu vulcan3 -c <earth.yaml>`, from a scratch directory
+holding the clone's `thermo/SNCHO_full_photo_network.txt` and
+`atm/atm_Earth_Jan_Kzz.txt` (no longer in the package); and vulcan3 again with
+`element_budget_tol: 1e9`. The conversion drops the refused `gs` (set `Mp`),
+`fix_species_time`, `gibbs_text`, `ode_solver`, `use_print_delta` and
+`fastchem_met_scale`, the explicit `dt_max` (1e17 exceeds `config.DT_MAX_S`;
+derived it is 1e15) and `Ar` (C13). The user's Earth inputs (item 2) matter only
+where they differ from the clone's. Done when the cause is a confirmed defect (a
+"Parity ledger" entry), the codes agree, or the budget term is shown to be the
+only blocker (then the maintainer decides how an open-column config certifies;
+the term itself stays).
 
 ## 4. Run-to-run differences
 
@@ -82,17 +103,19 @@ upstream.
 
 ## 5. K2-18b re-add
 
-Evidence: notes "Withdrawn configs". The user's YAML (`K2-18b-H2Ocloud.yaml`, in
-the dated directory of their files at the workspace root) was written for the
-0.3.1 tree: main refuses or drops 28 of its keys. Blocked on the user:
+Evidence: notes "Withdrawn configs". The user's YAML (`K2-18b-H2Ocloud.yaml`,
+attached to their 2026-10-14 report) was written for the 0.3.1 tree: main refuses
+it, naming 12 removed keys; with those gone it warns about and drops 12
+display-only keys. It also pins `fix_species` with condensation on, which opens
+the column for the element-budget term (item 3). Blocked on the user:
 `thermo/SNCHO_DMS_photo_network_2025.txt` is not on daw (only
 `SNCHO_DMS_photo_network_Tsai2024.txt` is vendored), and the atm file
 `atm_K2-18b-Nep100X-apo-H2Oclouds.txt` must be confirmed. Then convert the YAML
-(sectioned; keep `print_prog_num` and the plot keys), check what `remove_list
+(sectioned; keep `print_prog_num` and the supported plot keys), check what `remove_list
 [891, 892]` selects by position (C14), add the network and atm file with hash pins
 in `tests/science_sources.yaml`, and run `JAX_PLATFORMS=cpu vulcan3 -c K2-18b` on
 daw (~0.13 s/step [E]: ~9 min to 4000 steps, ~45 min to the 20000 cap; ask
-first). Done when end_case 1 with terminal hybrid phase 0 and the realised longdy
+first), and again with `element_budget_tol: 1e9` if it does not certify. Done when end_case 1 with terminal hybrid phase 0 and the realised longdy
 quoted; then update notes "Withdrawn configs" and "Do not retry", and the
 CLAUDE.md line on Earth and K2-18b.
 
