@@ -26,10 +26,10 @@ deleted 2026-10-19).
 - Step-count gates (`tests/test_step_count_gates.py`, full tier): HD189 1495,
   HD209 1211, W39b 1202 on arm64 and x86-64. HD189_vulcan3 is not in that test:
   2603 on arm64; on x86-64 it ends on its hybrid phase-1 budget at step 4018.
-- Tests: normal tier `python -m pytest tests -n 12`, budget 10 min on daw; on the
-  2026-10-20 working tree 312 passed / 94 skipped in 9:51 at load ~15 [M], just
-  inside the budget. Full tier
-  (`VULCAN3_RUN_SLOW=1`, oracle on) `1b90939`: 332 passed / 25 skipped, 21:10.
+- Tests: normal tier `python -m pytest tests`, budget 10 min on daw; after the
+  2026-10-20 cleanup 323 passed / 92 skipped in 6:29 at `-n 16` [M]. Full tier
+  (`VULCAN3_RUN_SLOW=1`, oracle on, no GPU): 352 passed / 63 skipped in 18:00 at
+  `-n 16` [M]; the skips are the CUDA kernel and compute-sanitizer tests.
   `oracle.yml` is `workflow_dispatch` only, one process per slow test; last green
   dispatch 37173830150 at `b372e65`.
 - Oracle clones: `vulcan2_ncho` 80f75b9, `vulcan2_fastchem_ps_order` 8970337
@@ -290,8 +290,6 @@ Rules whose evidence is a section of its own point there from CLAUDE.md
 - Gravity from `Mp`/`Rp`: `default.yaml` once shipped a different `Mp` from
   `HD189.yaml` (gs 2139.7705 vs 2140, per-layer J up to 7%); a fix to the named
   configs only silently changes every API user's run.
-- T-profile gradients: `build_atm_static` equals `make_atm_static` field for
-  field (<= 4e-16).
 - Condensation not differentiable: the pinned S8 tangent vs FD has relative error
   ~0.91.
 - Abundance file before a cross-code number: HD189, both converged, floor 1e-12:
@@ -324,12 +322,12 @@ Default NCHO network, 69 species, 878 reactions.
 
 | layer | max rel error | test |
 |---|---|---|
-| forward rates (439) / reverse rates (Gibbs) | 4.460e-16 / 5.705e-14 | `test_rates`, `test_gibbs` |
+| forward rates (439) / reverse rates (Gibbs) | 4.460e-16 / 5.705e-14 | `test_gibbs` |
 | atmosphere (`pco`, `Tco`, `Kzz`, `M`) | bit-exact | `test_default_master_parity` |
 | EQ seed | 7.9e-3 dex worst / 5.8e-5 median (HD189), 7.7e-3 / 9.1e-5 (W39b) | `test_eq_seed`, bar 2.4e-2 dex |
 | chemistry RHS | ~2e-13 worst cell, ~1e-16 bulk | `test_chem_rhs_codegen` |
 | analytical Jacobian vs `jacrev` | 2.8e-15 | `test_chem_jac_sparse` |
-| diffusion operator / upwind `vm` operator | ~1e-5 (cancellation) / ~2.7e-6 | `test_diffusion`, `test_diffusion_variants` |
+| diffusion operator / upwind `vm` operator | ~1e-5 (cancellation) / ~2.7e-6 | `test_diffusion` |
 | block-Thomas: small case vs `np.linalg.solve` / VULCAN shape vs LAPACK banded (`_oracles.banded_solve`) / one Ros2 step | 1.8e-14 / 1.8e-15 [M, 2026-10-20] / 1.6e-9 | `test_block_thomas`, `test_ros2_step` |
 | photo tau / flux / J | 7e-16 / 1.2e-11 / 6.8e-12 | `test_photo` |
 
@@ -444,10 +442,10 @@ reaches those dt (every solve instrumented):
   on that step's own grid over the fixed t=0 column, RELATIVE TO H. The absolute
   column carries the renormalisation's common mode (-1.04e-2 on every element on
   the planner's WASP-107 b column; as X/H 2.1e-6). Tolerance 1e-2: 370x headroom on
-  the worst photo-on gate, 4.6x on a photo-off column. Six knobs open the budget,
+  the worst photo-on gate, 4.6x on a photo-off column. Five knobs open the budget,
   none on in a shipped config (`use_topflux`, `use_botflux`/`v_dep`,
-  `use_fix_sp_bot`, `use_fix_H2He`, `use_fix_all_bot`, the `fix_species` pin);
-  validation rejects a `loss_ex` containing H. Precedent: KPP invariant-preserving
+  `use_fix_sp_bot`, `use_fix_H2He`, the `fix_species` pin);
+  a `loss_ex` containing H fails the runner build (H is the reference atom). Precedent: KPP invariant-preserving
   Rosenbrock, CVODE projection, Sandu 2001 (doi:10.1006/jcph.2001.6750).
 - The "strong-Kzz top boundary collapse" of W39b domain extensions was this leak
   in a 3000-3500 K bottom: since 0.6.0 the 50 bar -> 5e-9 bar column converges in
@@ -647,7 +645,7 @@ reports both converge upstream (todo).
 ### Differentiability
 
 - A quantity is differentiable when it reaches the runtime as a JAX array
-  (`rates_jax` T -> k, `atm_jax.build_atm_static`, `pco_from_endpoints`,
+  (`rates_jax` T -> k, `atm_setup.mu_dz_g_jax`, `atm_jax._mol_diff`,
   `kzz_profile_jax`, `sat_p_jax`, `settling_velocity_jax`; coefficients via
   `build_rate_array(..., rate_coeffs=, nasa9_coeffs=)`). [M/H] and C/O are `y0`
   tangents: the published `d ln SO2 / d ln Z = 2.6` for W39b.
@@ -763,7 +761,7 @@ A. Upstream errors corrected in the port
 | C15b | `make_bins_read_cross` drops a bin when `dbin_12trans` is out of range | `op.py:583-585` | `photo_setup._make_bins` raises; silent | unreachable shipped | no |
 | C19 | Ros2 stage vectors leak element content at large dt (only guard `loss_eps`) | `op.py:2914,2929`; `:2490`; `vulcan_cfg.py:136` | `jax_step._repair_stage` + `config.DT_MAX_S` (a larger `dt_max` raises); cap declared, repair silent | upstream fails the same column (S +32%); gates unchanged | no |
 | C20 | `OH + CH3 + M` Troe width in ln, not log10 | `op.py:204-205` | `rates_jax._troe_OH_CH3`; both sides via `ORACLE_CODE_DELTAS`; `test_troe_oh_ch3_is_visscher_moses_eq14` | rate 1.19-1.21x at Pr 0.1; max 0.111 ln VMR (HD189 CH4); gates unchanged | no |
-| L1 | `diffdf_settling_vm` drops the `vm` drift at the bottom interface | `op.py:1845-1848` | consistent; `test_diffusion_variants`; silent | one cell, `use_settling` only | no |
+| L1 | `diffdf_settling_vm` drops the `vm` drift at the bottom interface | `op.py:1845-1848` | consistent; `test_diffusion`; silent | one cell, `use_settling` only | no |
 | L2 | vm_branch setup `vm` rolls a 2-D array without `axis=0` | `vulcan3_vm_branch/build_atm.py:803` | `axis=0`; silent | 5e-10 at step 2 | no |
 | P18 | `sflux-GJ1214.txt` pads 133.75-181.55 nm with 464 zero rows | `atm/stellar_flux/sflux-GJ1214.txt` | upstream's regenerated file, `gj1214_upstream_regenerated`; declared | 0 shipped; regeneration lowers every flux 1.392x | bb9255b1 |
 
@@ -792,7 +790,7 @@ B. Found in upstream, kept at parity
 | P1 | unweighted atom-conservation diagnostic feeds `step_ok` and the adaptive rtol | `op.py:2472-2487` | `body_fn` `atom_loss_new` | unmeasured; a fix re-baselines | no |
 | P2 | two-stream pole `ll = -w0/(1/mu^2 - (1-w0)/edd^2)`; the clip is dead code | `op.py:2652`, clip `:2666` | `photo.compute_flux_jax` | 0.1-0.5% of cells, diffuse flux only; a fix is the analytic limit | no |
 | P3 | condensate mass in the gas mean molecular weight | `build_atm.py:520-525` | `atm_setup.compute_mean_mass` callers | condensation only; fix = restrict to `gas_indx` | no |
-| P4 | `atm_type='table'` stale `pico` for `dz` | `vulcan.py:118` -> `build_atm.py:406,530,554` | same; `build_atm_static` recomputes | `dzi` up to 12%; not live | no |
+| P4 | `atm_type='table'` stale `pico` for `dz` | `vulcan.py:118` -> `build_atm.py:406,530,554` | same | `dzi` up to 12%; not live | no |
 | P5 | `const_lowT` sum omits NH3, He as remainder | `build_atm.py:48`, `:213` | `ini_abun._load_const_lowT_y` | He/H 0.83% low at 10x N; not live | no |
 | P6 | = C16 | | | | no |
 | P7 | photolysis quadrature skips the bin-grid join interval | `op.py:2771-2780` | `photo.compute_J_jax_flat` | HO2 J 0.06% (W39b) / 0.32% (HD189), others <= 0.05% | no |
@@ -847,9 +845,7 @@ Master-only defects, already better here (do not "restore parity")
   set.
 - Undecided maintainer calls from the bloat audit: whether `steady_state_grad`
   stays as a research route, `HD189.yaml`, `VULCAN3_SOLVER=reference`. Left for a
-  pass with a test run: script-style `main()` bodies in 10 test files,
-  `runtime_validation._validate_numerical_bounds` (~240 lines) foldable into
-  tables.
+  pass with a test run: script-style `main()` bodies in 10 test files.
 - Reverse mode under `VULCAN3_SOLVER=ffi` is documented unsupported but not
   refused.
 
@@ -960,7 +956,7 @@ Parity and data
 - "Fixing" the escape-flux Jacobian entry or the S8 diagonal cells to match upstream, or patching the TiSNCHO / SNCHO_C3 duplicates, `CH3SH_branch.csv` or the CS-family masses: breaks bit-parity or touches unconsumed data.
 - Matched-step parity past ~step 145 at rtol >= 0.25 (FP amplification): compare converged states.
 - A higher-order vertical transport scheme: the shipped eddy and central moldiff kernels measure second order (1.95-2.00) on a 15x-stretched grid, and nz 150 is converged to about 1% at observable pressures.
-- Bit-moving refactors: folding atm_setup's mu/dz scans into `atm_refresh.hydrostatic_column` (1-2 ulp eager), one bin-weight contraction in `photo.compute_J_jax_flat`, the shared transport-kernel helpers (`c756201`, reverted `f3dfdf7`: vulcan-forward's `test_queue_is_differentiable` tangent 3.0e-4 -> 1.6e-2). Transport-kernel refactors need that full-tier test.
+- Bit-moving refactors: folding atm_setup's mu/dz scans into `atm_refresh.hydrostatic_column` (1-2 ulp eager) or `update_mu_dz_jax` onto `atm_setup.mu_dz_g_jax` (`zco` 1 ulp on W39b under jit), one bin-weight contraction in `photo.compute_J_jax_flat`, the shared transport-kernel helpers (`c756201`, reverted `f3dfdf7`: vulcan-forward's `test_queue_is_differentiable` tangent 3.0e-4 -> 1.6e-2). Transport-kernel refactors need that full-tier test.
 - ExoGibbs's bundled FastChem 3.1.3 tables as the seed's data (a second dataset, no excited states); exogibbs with its declared dependencies; `scan_hot_from_top` (cheaper, but moves the seed and HD189_vulcan3 misses its 20000-step cap).
 - Deselecting the `oracle.yml` HD209 codegen cases or pinning their arm64 FMA residual: they assert the platform-independent invariant since `ebcb780`.
 

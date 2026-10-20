@@ -159,8 +159,8 @@ outer_loop.OuterLoop                       one JIT'd lax.while_loop
 - A forward-mode tangent is certified by `OuterLoop.run_jvp` (C22), not by
   `jax.jvp(runner)`; pass the direction in finite-difference-step units. Never a
   step floor on a differentiated map.
-- A run ends only on the certificate or a cap (`use_conv_stall` is refused). Keep
-  the plateau counters: vulcan-forward's `ConvDiag` reads `count_since_new_min`.
+- A run ends only on the certificate or a cap (`use_conv_stall` is refused). The
+  plateau counters are diagnostics that no consumer reads; they feed no predicate.
 - `conver_ignore`: parity configs ship `[]`, the V3 preset `['HC3N']`; never pick
   a list because it reproduces a step count. Every shipped run converges on the
   LOOSE branch; quote the realised `longdy` next to any "converged" claim.
@@ -174,17 +174,18 @@ outer_loop.OuterLoop                       one JIT'd lax.while_loop
   map, `steady_state_grad.SOLVER_MAP`; `body_dt` 1e7); on photo columns pass
   `photo_recompute_k=make_photo_recompute_k(integ._photo_static, final)` (notes
   "Adjoint record"). T-profile gradients rebuild `k_arr` via
-  `rates_jax.build_rate_array` and the structure via `atm_jax.build_atm_static`.
+  `rates_jax.build_rate_array` and the structure via `atm_setup.mu_dz_g_jax` /
+  `atm_refresh.update_mu_dz_jax` and `atm_jax._mol_diff`.
   Run `audit_adjoint_scope` before trusting a gradient on a non-default config;
   never weaken it to pass a state.
 - Keep the full-tier `test_forward_jvp_integration` (Kzz JVP vs re-converged FD);
   a single-step or reverse-mode check does not replace it (notes "Forward mode").
 - Condensation (upstream `master_pin`) is NOT differentiable-through; the
   autodiff entry points refuse it (notes "Condensation contract (F1-F5)").
-- Adding a field to `AtmStatic` touches four places in src (the NamedTuple,
-  `make_atm_static`, `build_atm_static` + `AtmSpec`, `_ATM_STATIC_BATCH_AXES`)
-  plus every direct `AtmStatic(`/`AtmSpec(` call in examples/ and tests/. Splice
-  defaults into saved-fixture loaders rather than regenerating.
+- Adding a field to `AtmStatic` touches three places in src (the NamedTuple,
+  `make_atm_static`, `_ATM_STATIC_BATCH_AXES`) plus every direct `AtmStatic(`
+  call in examples/ and tests/. Splice defaults into saved-fixture loaders
+  rather than regenerating.
 - Network id columns are OUTPUT; index photolysis by parser POSITION (C14).
   `cfg.remove_list` is positional in both codes.
 - Every config declares `fastchem_solar_abundance_file`; match it before quoting
