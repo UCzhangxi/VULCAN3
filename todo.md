@@ -4,7 +4,7 @@ Evidence for these items is in `notes.md` (this repo's, unless another repo is n
 
 1. [decision] Send the reply to the external user's 2026-10-14 report; the decisions it carries are settled (detail below).
 2. [decision] Claim `vulcan3` on PyPI: the README installs put TestPyPI first, so a TestPyPI package can shadow its PyPI namesake.
-3. [robustness] The CUDA block-Thomas solve multiplies by 1/pivot with no division fallback, and the FFI build stamp ignores the CUDA arch and toolchain; both need a GPU host with nvcc (NAS) to change and test.
+3. [unverified] Build and A/B the branch `cuda-solve-guard` (CUDA solve divides outside the reciprocal's safe range; build stamp covers the arch and nvcc) on a NAS GH200, then merge it.
 
 ## 1. Reply to the external user
 
@@ -55,20 +55,20 @@ and its tag were made in a session whose record is not on daw; vulcan-retrieval'
 todo lists confirming them. Done when the name is claimed (and, if decided, the
 packages are published).
 
-## 3. CUDA solve reciprocal and the FFI build stamp
+## 3. CUDA solve guard and build stamp (branch `cuda-solve-guard`)
 
-- Solve: `bt_lu_solve_warp0` (`csrc/block_thomas_cuda.cu`) takes `1.0 / u_ii` and
-  multiplies, with no fallback; the kernel's own comment says a pivot below 2^-1024
-  in magnitude gives inf/nan (1 / 1e-310 overflows where `t_i / u_ii` can be
-  finite). The Gauss-Jordan factor already divides when `bt_div_by_rcp`'s range is
-  left; the solve does not. No production solve is known to reach such a pivot
-  (notes "Solver conditioning").
-- Build stamp: `solver_fast._source_hash` covers the kernel source and
-  `block_thomas_common.h` only. The `-arch` from `_nvcc_arch` and the nvcc version
-  are not in it, so a library built for another arch or toolchain counts as
-  current and is not rebuilt.
-- nvcc is not on daw: change and test on NAS. Gates: the `ffi` tests in
-  `tests/test_solver_fast.py`, and bitwise equality with the current kernel at the
-  production shape (pivots in range).
-- Done means: the solve divides outside the reciprocal's safe range (bitwise
-  unchanged inside it), and the stamp covers the arch and the nvcc version.
+- The branch makes `bt_lu_solve_warp0` divide when any pivot of a layer leaves
+  [2^-1000, 2^1000] (the factor's `bt_div_by_rcp` range) and run the old multiply
+  otherwise, and stamps the CUDA library with the source hash plus a hash of the
+  arch and `nvcc --version`. Not compiled: daw has no nvcc. No production solve is
+  known to reach such a pivot (notes "Solver conditioning").
+- On a GH200 (environment as `tools/gpu_kernel_test.pbs` sets it), in two scratch
+  clones of main and the branch: build both libraries with the production nvcc
+  and `NVCC_ARCH=sm_90`; compare `cuobjdump --dump-resource-usage` for
+  `bt_solve_kernel`; run `tools/ab_cuda_solve.py` (its docstring has the capture /
+  run / compare steps); run `tests/test_solver_fast.py` with
+  `JAX_PLATFORMS=cuda,cpu`, plain and under the command-buffer flags, and check the
+  CUDA tests pass rather than skip.
+- Done means: every A/B digest bitwise equal at 792 lanes, the subnormal-pivot
+  block finite on the new kernel, solve time unchanged, the `ffi` tests passing;
+  then merge without `tools/ab_cuda_solve.py`.
