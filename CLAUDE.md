@@ -24,7 +24,7 @@ dead-in-master paths are not ported; do not chase oracle tests for every knob.
 
 - The VULCAN 2 reference is the pinned clones under `VULCAN_Project/.oracles/`
   (revisions in `tests/science_sources.yaml`), given as `$VULCAN_MASTER_DIR`; a
-  dirty clone is refused (on daw use the copy named in notes "Current state").
+  dirty clone is refused (notes "Current state").
   Never cite a hand-patched VULCAN-master copy for what upstream ships, or diff a
   disputed step count's config against one (notes "Oracle policy").
   `exoclime/VULCAN` now serves VULCAN 3: fetch from it only for VULCAN 3.

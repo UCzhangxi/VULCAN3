@@ -33,9 +33,10 @@ deleted 2026-10-19).
   `oracle.yml` is `workflow_dispatch` only, one process per slow test; last green
   dispatch 37173830150 at `b372e65`.
 - Oracle clones: `vulcan2_ncho` 80f75b9, `vulcan2_fastchem_ps_order` 8970337
-  (provenance only, no test), `vulcan3_vm_branch` 84d010d. daw's
-  `.oracles/vulcan2_ncho` has 705 dirty files and `require_oracle` refuses it; use
-  the clean copy `/home/imalsky/VULCAN_Project/.backup/oracles/vulcan2_ncho`.
+  (provenance only, no test), `vulcan3_vm_branch` 84d010d. On daw the
+  clones are clean at those commits with `core.fileMode false` (copies had left
+  mode-only changes and deleted `.DS_Store` files; restored 2026-10-20), so
+  `VULCAN_MASTER_DIR=/home/imalsky/VULCAN_Project/.oracles/vulcan2_ncho` works.
 - Fixtures: daw's `tests/data/*.npz` are an x86-64 rebuild at `2fef3c1`; the
   tracked `FIXTURES.json` is the 2026-09-19 arm64 manifest (old `vulcan_jax`
   field names), so `gen_fixtures.py --verify` fails on daw by design.
