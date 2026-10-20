@@ -455,10 +455,10 @@ reaches those dt (every solve instrumented):
   none on in a shipped config (`use_topflux`, `use_botflux`/`v_dep`,
   `use_fix_sp_bot`, `use_fix_H2He`, the `fix_species` pin);
   a `loss_ex` containing H fails the runner build (H is the reference atom).
-  So an open column can fail to certify on exchange it is meant to have, ending at
-  the step cap without naming the term: measured on Earth ("Withdrawn configs"), [I]
-  for the external user's K2-18b; the JWST tool's S8 pin certified. Precedent: KPP invariant-preserving
-  Rosenbrock, CVODE projection, Sandu 2001 (doi:10.1006/jcph.2001.6750).
+  An open column can fail to certify on exchange it is meant to have (measured on
+  Earth, "Withdrawn configs"; [I] for the external user's K2-18b; the JWST S8 pin
+  certified); its step-cap exit names the term and `.inf`. Precedent: KPP's
+  invariant-preserving Rosenbrock, CVODE projection, Sandu 2001 (doi:10.1006/jcph.2001.6750).
 - The "strong-Kzz top boundary collapse" of W39b domain extensions was this leak
   in a 3000-3500 K bottom: since 0.6.0 the 50 bar -> 5e-9 bar column converges in
   885 steps, every element within 5.4e-5; pinned upstream hits its 3000-step cap
