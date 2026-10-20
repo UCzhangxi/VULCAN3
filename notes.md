@@ -702,6 +702,11 @@ Both kept for parity.
 
 ### Decided by the maintainer, not to be re-opened
 
+The geometry and element-budget certificate terms stay (2026-10-20, after both
+referees recommended it): the rule "keep VULCAN's original convergence criteria"
+keeps every VULCAN 2 test and allows extra tests that fix a confirmed defect; a
+relaxation of VULCAN's gate is never adopted.
+
 The three ion-mode / low-T parity items of the 2026-09-08 audit stay at parity;
 P4, P5, P7, P8, P9, P10 stay; NH3 and CH stay in the default network (removal
 re-baselines every gate for no measured benefit); the C20 report is not filed

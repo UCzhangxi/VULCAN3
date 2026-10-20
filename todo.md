@@ -2,7 +2,7 @@
 
 Evidence for these items is in `notes.md` (this repo's, unless another repo is named).
 
-1. [decision] Confirm the departures from VULCAN master (both referees now recommend keeping the geometry and element-budget certificate terms), schedule the measurements they ask for, and decide whether batches B-D of the provenance audit are owed.
+1. [decision] Confirm the remaining departures from VULCAN master (projection, stage repair, `DT_MAX_S`, abundance file, retry cap; both referees keep them), schedule the owed measurements, and decide whether batches B-D of the provenance audit are owed.
 2. [decision] Reply to the external user's report (draft exists in the maintainer's mail); items 3-5 wait on the files and logs it asks for.
 3. [bug?] The external user reports that Earth converges in VULCAN but not in vulcan3 with the same inputs.
 4. [bug?] The external user reports that vulcan3 runs differ from run to run on their machine.
@@ -24,12 +24,8 @@ production run:
 - the retry cap with force-accept (`batch_max_retries` 110).
 
 Verdicts: both referees keep the projection, the stage repair, `DT_MAX_S`, the
-abundance file and the retry cap. They split on the two certificate terms: the
-outside review would demote them to diagnostics under the rule "keep VULCAN's
-original convergence criteria"; the second referee keeps them (tightenings that fix
-a confirmed defect stay, relaxations were dropped), rejects the middle path, and
-notes that keeping them keeps baseline v4 comparable with v2. That reading of the
-rule is the maintainer's to confirm.
+abundance file and the retry cap. The two certificate terms are decided: keep
+(notes "Decided by the maintainer, not to be re-opened").
 
 Owed measurements (none blocks the v4 launch):
 - Certificate-term A/B, no code change: ~50 v2 posterior draws (include lnKzz <
