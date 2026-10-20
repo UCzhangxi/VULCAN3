@@ -111,6 +111,11 @@ constexpr int kGjProwInts = kGjPivotBufs + 1;
 constexpr int kGjIntDoubles = (kGjProwInts + 2 * kGjMaxNi + 1) / 2;
 constexpr int kGjOffS = (kGjOffInt + kGjIntDoubles + 1) / 2 * 2;  // 16-byte aligned
 static_assert(kGjOffRowbuf % 2 == 0, "rowbuf is read as double2");
+// Range of bt_div_by_rcp: |piv| within [2^-1000, 2^1000] (a normal reciprocal),
+// |a| at least and |a y| within 2^+-960 (normal products, exact residuals).
+// The solve (bt_lu_solve_warp0) multiplies by 1 / piv only in the piv range.
+constexpr double kGjRcpPivMin = 0x1p-1000, kGjRcpPivMax = 0x1p1000;
+constexpr double kGjRcpQuotMin = 0x1p-960, kGjRcpQuotMax = 0x1p960;
 
 // Sum over q0 <= q < q1 of arow[q] * mcol[q * ms], in four independent
 // accumulators so the dependent shared-memory loads overlap. It differs from
@@ -142,18 +147,24 @@ __device__ inline double bt_dot4(const double* arow, const double* mcol, int ms,
 // prefetch meanwhile. The forward substitution applies the CPU lu_solve's
 // subtractions in its order, the back substitution in reverse order, and
 // x_i = t_i * (1 / u_ii) rounds twice where the CPU's t_i / u_ii rounds once.
-// A zero pivot still gives inf/nan; so does one below 2^-1024 in magnitude,
-// whose reciprocal overflows.
+// When any lane's |u_ii| is outside [2^-1000, 2^1000] (kGjRcpPiv*: zero,
+// infinite and NaN pivots included, and those whose reciprocal overflows or
+// is subnormal) the warp takes x_i = t_i / u_ii for every row, as the CPU
+// does; a zero pivot gives inf/nan.
 template <int NB>
 __device__ void bt_lu_solve_warp0(const double* lu, int ni, const double* tmp, double* x,
                                   int lane) {
   double t[NB], rd[NB];
+  bool fast = true;
 #pragma unroll
   for (int q = 0; q < NB; ++q) {
     const int r = lane + kWarpSize * q;
+    const double u = (r < ni) ? lu[r * ni + r] : 1.0;
     t[q] = (r < ni) ? tmp[r] : 0.0;
-    rd[q] = (r < ni) ? 1.0 / lu[r * ni + r] : 0.0;
+    rd[q] = (r < ni) ? 1.0 / u : 0.0;
+    fast = fast && fabs(u) >= kGjRcpPivMin && fabs(u) <= kGjRcpPivMax;  // false for 0, inf, NaN
   }
+  fast = __all_sync(kFullMask, fast);
   // Row i sits in slot i / kWarpSize of lane i % kWarpSize. The loops over that
   // slot are unrolled, so every index into t is a constant; a row below i is
   // in a slot >= i's, a row above in a slot <= i's.
@@ -173,7 +184,7 @@ __device__ void bt_lu_solve_warp0(const double* lu, int ni, const double* tmp, d
     for (int i = min(ni, kWarpSize * (qi + 1)) - 1; i >= kWarpSize * qi; --i) {
       double xi = 0.0;
       if (lane == (i & kLaneMask)) {
-        xi = t[qi] * rd[qi];
+        xi = fast ? t[qi] * rd[qi] : t[qi] / lu[i * ni + i];
         x[i] = xi;
       }
       xi = __shfl_sync(kFullMask, xi, i & kLaneMask);
@@ -453,11 +464,6 @@ __device__ __forceinline__ void bt_warp_argmax(double& best_abs, double& best_va
   }
 #endif
 }
-
-// Range of bt_div_by_rcp: |piv| within [2^-1000, 2^1000] (a normal reciprocal),
-// |a| at least and |a y| within 2^+-960 (normal products, exact residuals).
-constexpr double kGjRcpPivMin = 0x1p-1000, kGjRcpPivMax = 0x1p1000;
-constexpr double kGjRcpQuotMin = 0x1p-960, kGjRcpQuotMax = 0x1p960;
 
 // a / b from y = 1 / b (IEEE): q0 = a y and two FMA corrections with the
 // exact residual a - b q. y correctly rounded leaves q1 within an ulp of a / b

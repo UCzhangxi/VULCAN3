@@ -789,6 +789,39 @@ def test_fast_is_the_default_solver():
     assert jax_step.factor_block_thomas_diag_offdiag is fast_mod.factor
 
 
+_FAKE_NVCC = """
+import os, sys
+if "--version" in sys.argv:
+    print("Cuda compilation tools, " + os.environ["FAKE_NVCC_RELEASE"])
+else:
+    stamp = next(a.split("=", 1)[1] for a in sys.argv if a.startswith("-DVULCAN_BT_SOURCE_HASH="))
+    with open(sys.argv[sys.argv.index("-o") + 1], "w") as f:
+        f.write("vulcan-bt-source-sha256:" + stamp)
+"""
+
+
+@pytest.mark.parametrize("change", [("NVCC_ARCH", "sm_80"), ("FAKE_NVCC_RELEASE", "V12.8.93")],
+                         ids=["arch", "nvcc"])
+def test_cuda_build_stamp_covers_arch_and_nvcc(change, tmp_path, monkeypatch):
+    """`build(cuda=True)` redoes a GPU library built for another arch or with
+    another nvcc, and the loader's check (the sources only: a GPU job's JAX
+    process need not have nvcc) still accepts it. A stand-in nvcc writes the
+    stamp it is given."""
+    nvcc = tmp_path / "nvcc"
+    nvcc.write_text(f"#!{sys.executable}" + _FAKE_NVCC)
+    nvcc.chmod(0o755)
+    monkeypatch.setattr(fast_mod, "_CUDA_LIB", tmp_path / fast_mod._CUDA_LIB.name)
+    monkeypatch.setenv("NVCC", str(nvcc))
+    monkeypatch.setenv("NVCC_ARCH", "sm_90")
+    monkeypatch.setenv("FAKE_NVCC_RELEASE", "V12.6.77")
+    built = [fast_mod.build(cuda=True).read_bytes()]
+    monkeypatch.setenv(*change)
+    built.append(fast_mod.build(cuda=True).read_bytes())
+    assert built[0] != built[1]
+    src_hash = fast_mod._source_hash(fast_mod._CSRC / "block_thomas_cuda.cu")
+    assert all(fast_mod._HASH_TAG + src_hash.encode() in b for b in built)
+
+
 _CHILD = r"""
 import os, sys
 os.environ["VULCAN3_ATOM_LIST"] = "H,O,C,N,S"

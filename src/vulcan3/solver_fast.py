@@ -145,10 +145,11 @@ def _source_hash(src: Path) -> str:
     return h.hexdigest()
 
 
-def _is_current(lib: Path, src: Path) -> bool:
-    """True if `lib` embeds the hash of the present sources. The file is read,
-    not loaded: dlopen would keep a stale library cached under its path."""
-    return lib.exists() and _HASH_TAG + _source_hash(src).encode() in lib.read_bytes()
+def _is_current(lib: Path, stamp: str) -> bool:
+    """True if `lib` embeds `stamp`, alone or as the start of a longer stamp.
+    The file is read, not loaded: dlopen would keep a stale library cached
+    under its path."""
+    return lib.exists() and _HASH_TAG + stamp.encode() in lib.read_bytes()
 
 
 def _nvcc_arch() -> str:
@@ -175,18 +176,26 @@ def _nvcc_arch() -> str:
 def build(force: bool = False, cuda: bool = False) -> Path:
     """Compile the CPU kernel with the system C++ compiler ($CXX or c++), or
     with `cuda=True` the GPU twin with nvcc ($NVCC, arch from `_nvcc_arch`).
-    Returns the library at once if it embeds the hash of the present sources,
-    unless `force`."""
+    Returns the library at once if it embeds the stamp of the present build,
+    unless `force`: the hash of the sources and, for the GPU twin, after it a
+    hash of the arch and `nvcc --version`, so a build for another GPU or
+    toolchain is redone."""
     src = _CSRC / ("block_thomas_cuda.cu" if cuda else "block_thomas_cpu.cc")
     lib = _CUDA_LIB if cuda else _LIB
-    if not force and _is_current(lib, src):
+    stamp = _source_hash(src)
+    if cuda:
+        nvcc, arch = os.environ.get("NVCC", "nvcc"), _nvcc_arch()
+        version = subprocess.run([nvcc, "--version"], check=True, capture_output=True,
+                                 text=True).stdout
+        stamp += "_" + hashlib.sha256(f"{arch}\n{version}".encode()).hexdigest()
+    if not force and _is_current(lib, stamp):
         return lib
     # -isystem: the XLA headers' own warnings are not reported. No -Werror: the
     # CPU build runs on the first `ffi` call, where a newer compiler's warning must not fail.
-    flags = ["-O2", "-std=c++17", "-shared", f"-DVULCAN_BT_SOURCE_HASH={_source_hash(src)}",
+    flags = ["-O2", "-std=c++17", "-shared", f"-DVULCAN_BT_SOURCE_HASH={stamp}",
              "-isystem", jax.ffi.include_dir()]
     if cuda:
-        cmd = [os.environ.get("NVCC", "nvcc"), *flags, f"-arch={_nvcc_arch()}", "-lineinfo",
+        cmd = [nvcc, *flags, f"-arch={arch}", "-lineinfo",
                "-Xcompiler", "-fPIC,-Wall,-Wextra"]
     else:
         cmd = [os.environ.get("CXX", "c++"), *flags, "-fPIC", "-Wall", "-Wextra"]
@@ -212,9 +221,11 @@ def _register():
     if _REGISTERED:
         return
     # The CUDA twin is built only by `--cuda`, never here, so a stale one is
-    # refused rather than loaded (`build` rebuilds the CPU kernel).
+    # refused rather than loaded (`build` rebuilds the CPU kernel). Only its
+    # sources are checked here, the start of its stamp: a GPU job's JAX
+    # process need not have nvcc. `build` checks the arch and the nvcc version.
     cu_src = _CSRC / "block_thomas_cuda.cu"
-    if _CUDA_LIB.exists() and not _is_current(_CUDA_LIB, cu_src):
+    if _CUDA_LIB.exists() and not _is_current(_CUDA_LIB, _source_hash(cu_src)):
         raise RuntimeError(
             f"{_CUDA_LIB} was not built from the present {cu_src.name} and "
             "block_thomas_common.h; rebuild it on the GPU host with `python -m "

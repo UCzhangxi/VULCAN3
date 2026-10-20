@@ -18,7 +18,8 @@
 #define BT_HOST_DEVICE
 #endif
 
-// sha256 of the sources, set by solver_fast.build. The loader finds it in the
+// sha256 of the sources, set by solver_fast.build; in the CUDA library followed
+// by a hash of the arch and the nvcc version. The loader finds it in the
 // library file to tell a stale build from a current one.
 #ifndef VULCAN_BT_SOURCE_HASH
 #error "build with python -m vulcan3.solver_fast, which defines VULCAN_BT_SOURCE_HASH"
