@@ -18,11 +18,9 @@ deleted 2026-10-19).
   `w39b-baseline-v2`. Package, distribution, CLI and env prefix are `vulcan3` /
   `VULCAN3_*` since 0.18.0 (GitHub `imalsky/VULCAN3`); earlier releases were
   `vulcan-jax`. 0.18.0 is on TestPyPI, not on PyPI [I].
-- Consumers floor `vulcan3>=0.18.0`; vulcan-retrieval's `requirements-hpc.txt`
-  pins `eeb4873`.
-- Production: vulcan-retrieval's WASP-39b runs on NAS GH200 nodes at `eeb4873`:
-  SNCHO, nz 62, ni 89, `VULCAN3_SOLVER=ffi`, 792 lanes, a `queue_compact`
-  ladder, `VULCAN3_CHEM_RHS=grouped` (run settings are vulcan-retrieval's).
+- Consumers floor `vulcan3>=0.18.0`. Production: vulcan-retrieval's WASP-39b v4 on
+  NAS GH200s at `a420570` (its `requirements-hpc.txt` pin): SNCHO, nz 100, ni 89,
+  `ffi`, 528 lanes, `queue_compact`, grouped RHS (run settings are vulcan-retrieval's).
 - Step-count gates (`tests/test_step_count_gates.py`, full tier): HD189 1495,
   HD209 1211, W39b 1202 on arm64 and x86-64. HD189_vulcan3 is not in that test:
   2603 on arm64; on x86-64 it ends on its hybrid phase-1 budget at step 4018.
@@ -42,7 +40,7 @@ deleted 2026-10-19).
 
 ## Efficiency program
 
-GH200 rows are the production shape (W39b SNCHO, nz 62, ni 89); other rows name
+GH200 rows are the v2 production shape (W39b SNCHO, nz 62, ni 89); other rows name
 their host. Per-commit record: `git log`. Batched runs are not bitwise equal to
 solo runs (maintainer decision); the parity gates are solo runs and every change
 kept them.
@@ -77,7 +75,9 @@ occupancy 25%, barrier stalls 42%. One pivot step ~1500 cycles before `a5b1215`,
 838 after; the column chain alone has a floor of 623. Blocked, panel and
 tensor-core variants were not faster (bgj8sf 29.3 ms, bgj8s 33.7, bgjl8 76.5),
 although DMMA reaches 64 TFLOP/s in isolation. ~60% of the remaining factor time
-is the pivot chain [E]: further gains need fewer serial steps.
+is the pivot chain [E]: further gains need fewer serial steps. At nz 100 (`a420570`,
+GH200, nsys of vulcan-retrieval job 94946) the factor runs 3.0 TFLOP/s at 528 and 264
+lanes, 2.5 at 396 (2 blocks/SM, so a half-empty 2nd wave), 1.8 at 132 [E].
 
 Steps to certification (HD189) [M]: 1054 of 1495 steps are model time at the
 3.775e4 s plateau, ~441 the ramp from dttry 1e-10 plus five dt collapses on

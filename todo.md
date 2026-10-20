@@ -4,7 +4,7 @@ Evidence for these items is in `notes.md` (this repo's, unless another repo is n
 
 1. [decision] Send the reply to the external user's 2026-10-14 report; the decisions it carries are settled (detail below).
 2. [decision] Claim `vulcan3` on PyPI: the README installs put TestPyPI first, so a TestPyPI package can shadow its PyPI namesake.
-3. [unverified] Build and A/B the CUDA solve guard and build stamp (on main, not yet compiled) on a NAS GH200 before the next production run.
+3. [unverified] A/B the CUDA solve guard against `bd97791` on a NAS GH200: it is built and the `ffi` tests pass there (2026-10-20); the bitwise A/B, the subnormal-pivot block and the solve time are not done.
 
 ## 1. Reply to the external user
 
@@ -60,14 +60,19 @@ packages are published).
 - On main (`2e947dc`): `bt_lu_solve_warp0` divides when any pivot of a layer
   leaves [2^-1000, 2^1000] (the factor's `bt_div_by_rcp` range) and runs the old
   multiply otherwise; the CUDA library's stamp is the source hash plus a hash of
-  the arch and `nvcc --version`. Not compiled: daw has no nvcc. A production job
-  builds the kernel at start, so check it before the next run.
+  the arch and `nvcc --version`.
+- Done 2026-10-20 at `a420570` [M]: `tools/gpu_kernel_test.pbs` (job 94875) built
+  both libraries (nvcc 12.6 V12.6.85; the stamp is two 64-hex hashes) and ran
+  `tests/test_solver_fast.py` on the GPU twice, plain and under XLA_CMDBUF=2's
+  flags: 53 passed / 21 skipped each (16 compute-sanitizer, 3 full tier, 2
+  stacked-rhs on the C++ handler), the `huge` (2^1003 pivot) and `tiny` cases
+  included. vulcan-retrieval's v4 job (94946) found that library current at start.
 - On a GH200 (environment as `tools/gpu_kernel_test.pbs` sets it), in two scratch
   clones at `bd97791` (old) and main (new): build both libraries with the
   production nvcc and `NVCC_ARCH=sm_90`; compare `cuobjdump --dump-resource-usage`
   for `bt_solve_kernel`; run `tools/ab_cuda_solve.py` (its docstring has the
-  capture / run / compare steps); or simply run `tools/gpu_kernel_test.pbs`, which
-  now runs the CUDA tests instead of skipping them.
+  capture / run / compare steps). `tools/gpu_kernel_test.pbs` alone compares CUDA
+  with CPU, not the old kernel with the new.
 - Done means: every A/B digest bitwise equal at 792 lanes, the subnormal-pivot
   block finite on the new kernel, solve time unchanged, the `ffi` tests passing;
   then delete `tools/ab_cuda_solve.py`.
