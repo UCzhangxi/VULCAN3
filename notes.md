@@ -117,13 +117,16 @@ marked "provenance not recorded" need the maintainer's confirmation (todo). The
 later 328 commits (batches B-D) were not audited. Lines checked at `93896f6`.
 
 Convergence and certificate
-- Geometry term C21 (`geom_conv_tol` 1e-3; `default.yaml:176`, `W39b.yaml:170`).
-  Reason: upstream certifies on chemistry alone with geometry up to `update_frq`
-  (100) steps stale; HD209 photo-off certified with mu 26.3% off. Provenance not
-  recorded.
+- Geometry term C21 (`geom_conv_tol` 1e-3; `default.yaml:176`, `W39b.yaml:170`;
+  added in `001082e`, 0.7.0). Reason: upstream stops on chemistry and flux alone
+  (`op.py:1060-1069`) with mu/dz refreshed every `update_frq` (100) steps
+  (`op.py:904`); HD209 photo-off certified with mu 26.3% off ("Certificates").
 - Element-budget term C23 (`element_budget_tol` 1e-2; `default.yaml:180`,
-  `W39b.yaml:171`). Reason: `loss_eps` bounds only the per-step change; a column
-  certified having lost 21% of its sulfur. Provenance not recorded.
+  `W39b.yaml:171`; added in `46313d1`, 0.9.0). Reason: `loss_eps` bounds only the
+  per-step change of the atom sum (`op.py:2480-2495`), so a slow drain passes it; a
+  W39b column certified having lost 21% of its sulfur. The stage repair drops
+  oversized corrections and misses the moldiff boundary rows, so this is the one
+  check on the finished column. Closed columns only ("Stage repair and element budget").
 - Tangent term C22 (`OuterLoop.run_jvp` only). Reason: `jax.jvp(runner)` from a
   warm start stops at `count_min` with the tangent unrelaxed (AD/FD corr 0.33).
 - `conver_ignore`: parity configs ship `[]`, as upstream's HD189 example
@@ -454,7 +457,11 @@ reaches those dt (every solve instrumented):
   the worst photo-on gate, 4.6x on a photo-off column. Five knobs open the budget,
   none on in a shipped config (`use_topflux`, `use_botflux`/`v_dep`,
   `use_fix_sp_bot`, `use_fix_H2He`, the `fix_species` pin);
-  a `loss_ex` containing H fails the runner build (H is the reference atom). Precedent: KPP invariant-preserving
+  a `loss_ex` containing H fails the runner build (H is the reference atom).
+  So an open column can fail to certify on exchange it is meant to have, exiting on
+  the step cap without naming the term [I]: Earth (bottom flux and pins), the
+  external user's K2-18b (`fix_species` with condensation), the JWST tool's sulfur
+  condensation (whole-column `fix_species` pin). Precedent: KPP invariant-preserving
   Rosenbrock, CVODE projection, Sandu 2001 (doi:10.1006/jcph.2001.6750).
 - The "strong-Kzz top boundary collapse" of W39b domain extensions was this leak
   in a 3000-3500 K bottom: since 0.6.0 the 50 bar -> 5e-9 bar column converges in
@@ -474,7 +481,6 @@ reaches those dt (every solve instrumented):
 ## Certificates
 
 C21 (geometry) and C22 (tangent); C23 is in "Stage repair and element budget".
-
 
 - C21: HD209 photo-off certifies at 192 steps with mu 26.30% off what its ymix
   implies; tightening the chemistry alone leaves 6.6%. With the term: tol 1e-4 303
@@ -545,6 +551,13 @@ reports both converge upstream (todo).
   central 30001 at 0.459, upstream 1.00 at 3000; the clock froze at 6.18e4 s
   from step 3001. Its `remove_list` resolved by position to `NH3 + CH` and `SH +
   NO2`, and it omitted `batch_max_retries`.
+- Earth on main (both records predate the element-budget term, 0.9.0): upstream
+  from a disposable clone copy (C13 fix, four missing keys); vulcan3 from a scratch
+  dir with the clone's `SNCHO_full_photo_network.txt` and `atm_Earth_Jan_Kzz.txt`,
+  with and without `element_budget_tol: 1e9`, after dropping the refused keys (`Mp`
+  for `gs`), `dt_max` (1e17 > `DT_MAX_S`) and `Ar`.
+- K2-18b re-add (needs the external user's DMS-2025 network and atm file): convert
+  their YAML, check `remove_list` by position (C14), hash-pin inputs, run to end_case 1.
 
 ## Design records
 
