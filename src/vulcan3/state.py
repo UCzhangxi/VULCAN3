@@ -635,9 +635,9 @@ def _cfg_overlay(cfg):
             before[name] = copy.deepcopy(getattr(base, name))
         else:
             added.append(name)
-        # Copy mutable containers rather than aliasing: setup writes some
-        # knobs in place through `base`, and a bare setattr would land those
-        # writes in the caller's cfg, mutating it for a second run.
+        # Copy mutable containers rather than aliasing, so an in-place write
+        # through `base` can never reach the caller's cfg. Setup must not
+        # write config knobs: such a write is lost when the overlay ends.
         if isinstance(val, (list, dict, set, bytearray)):
             val = copy.deepcopy(val)
         setattr(base, name, val)

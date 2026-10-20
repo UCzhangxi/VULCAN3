@@ -2322,7 +2322,12 @@ class OuterLoop:
             charge_np = np.zeros(ni, dtype=np.float64)
             e_idx = 0
 
-        fix_sp_bot_cfg = self._cfg.use_fix_sp_bot or {}
+        fix_sp_bot_cfg = dict(self._cfg.use_fix_sp_bot or {})
+        # use_sat_surfaceH2O pins bottom H2O at the surface saturation that
+        # setup computed (build_atm.py:227-228; applied every step, op.py:2945).
+        if (self._cfg.use_condense and self._cfg.use_sat_surfaceH2O
+                and "H2O" in self._cfg.condense_sp):
+            fix_sp_bot_cfg["H2O"] = float(np.asarray(atm.sat_mix["H2O"])[0])
         use_fix_sp_bot = bool(fix_sp_bot_cfg)
         if use_fix_sp_bot:
             fix_sp_bot_idx = np.asarray(
@@ -2494,7 +2499,7 @@ class OuterLoop:
             self._statics,
             bool(self._cfg.non_gas_sp),
             gas_mask_jnp,
-            bool(self._cfg.use_botflux or self._cfg.use_fix_sp_bot),
+            bool(self._cfg.use_botflux) or bool(self._statics.use_fix_sp_bot),
             jnp.asarray(cond_mask_np),
             float(self._cfg.start_conden_time),
             float(self._cfg.stop_conden_time),

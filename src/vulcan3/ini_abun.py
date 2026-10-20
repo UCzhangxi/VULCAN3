@@ -595,9 +595,9 @@ _MODE_DISPATCH = {
 def _apply_condense(y: np.ndarray, data_atm) -> np.ndarray:
     """Apply the `use_condense` initial-cold-trap clip.
 
-    Mutates `data_atm.sat_mix` / `data_atm.conden_min_lev` and (for
-    H2O + `use_sat_surfaceH2O`) `_CFG.use_fix_sp_bot`. Returns
-    the clipped `y` so the caller can recompute ymix.
+    Mutates `data_atm.sat_mix` / `data_atm.conden_min_lev`. Returns the
+    clipped `y` so the caller can recompute ymix. The `use_sat_surfaceH2O`
+    bottom pin is built by the runner from `sat_mix`, not written here.
     """
     if _CFG.use_condense is not True:
         return y
@@ -610,10 +610,9 @@ def _apply_condense(y: np.ndarray, data_atm) -> np.ndarray:
         if sp == "H2O":
             data_atm.sat_mix[sp] *= _CFG.humidity
             if _CFG.use_sat_surfaceH2O is True:
-                _CFG.use_fix_sp_bot[sp] = data_atm.sat_mix[sp][0]
                 logger.info(
                     "The fixed surface water is now reset by condensation and humidity to "
-                    + str(_CFG.use_fix_sp_bot[sp])
+                    + str(data_atm.sat_mix[sp][0])
                 )
                 # The ymix write is overwritten by the final renormalisation;
                 # only the y replacement survives, so just update y here.
@@ -669,8 +668,7 @@ def compute_initial_abundance(data_atm) -> IniAbunOutputs:
     """Run the configured `ini_mix` mode and return a typed pytree.
 
     Side effect: when `use_condense=True`, the legacy `data_atm` container
-    is mutated (saturation profiles, cold-trap min level, optional surface
-    H2O override, which goes to `_CFG.use_fix_sp_bot`). The pytree carries
+    is mutated (saturation profiles, cold-trap min level). The pytree carries
     the gas-phase composition only.
     """
     mix = _CFG.ini_mix

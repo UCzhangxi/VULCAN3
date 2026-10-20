@@ -8,7 +8,8 @@ Self-contained: isothermal TP + const_mix init, no photo, no EQ seed.
 
 Checks: (1) settling velocities are downward for each condensate column and
 exactly zero for gas species; (2) a short H2O-relaxation run stays finite and
-actually moves mass into `H2O_l_s` (full runner conden path).
+actually moves mass into `H2O_l_s` (full runner conden path); (3)
+`use_sat_surfaceH2O` reaches the runner's bottom pin on both config paths.
 """
 
 from __future__ import annotations
@@ -96,6 +97,23 @@ cond_total = float(y[:, sl.index("H2O_l_s")].sum())
 assert cond_total > 0.0, f"no H2O condensate formed (total={cond_total:.3e})"
 print(f"CONDEN_OK t={float(rs_out.step.t):.2e} count={int(rs_out.params.count)} "
       f"H2O_l_s_total={cond_total:.3e} ({time.time()-t0:.1f}s)")
+
+# ---- Check 3: use_sat_surfaceH2O pins bottom H2O at its surface saturation ----
+# On default_config() and on a separate Config (the load_config path, where
+# setup runs on a copy of the config); neither config is mutated.
+import copy
+from vulcan3.state import legacy_view
+cfg.use_sat_surfaceH2O = True
+for c in (cfg, copy.deepcopy(cfg)):
+    rs = RunState.with_pre_loop_setup(c, skip_chem_warmup=True)
+    var, atm, _ = legacy_view(rs)
+    st = outer_loop.OuterLoop(op_jax.Ros2JAX(), op.Output(cfg=c), cfg=c)._build_statics(var, atm)
+    pins = {sl[int(i)]: float(m) for i, m in
+            zip(np.asarray(st.fix_sp_bot_idx), np.asarray(st.fix_sp_bot_mix))}
+    want = float(np.asarray(rs.metadata.sat_mix["H2O"])[0])
+    assert st.use_fix_sp_bot and pins == {"H2O": want}, (pins, want)
+    assert c.use_fix_sp_bot == {} and default_config().use_fix_sp_bot == {}
+print("SAT_SURFACE_OK")
 print("PASS")
 """
 
@@ -104,4 +122,5 @@ def test_condensation_runtime_subprocess():
     res = run_child(_CHILD, network=CONDEN_NETWORK, label="condensation")
     assert "SETTLING_OK" in res.stdout, res.stdout
     assert "CONDEN_OK" in res.stdout, res.stdout
+    assert "SAT_SURFACE_OK" in res.stdout, res.stdout
     assert res.stdout.strip().endswith("PASS")
