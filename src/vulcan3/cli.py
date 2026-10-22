@@ -28,11 +28,10 @@ import logging
 import sys
 
 from . import legacy_io as op
-from .config import _FROZEN_ENV, default_config, dump_config, load_config
+from .config import _FROZEN_ENV, dump_config, load_config
 from . import op_jax
 from . import outer_loop
-from .runtime_validation import validate_runtime_config
-from .state import RunState
+from .state import RunState, _frozen_mismatch
 
 # Set on the re-executed process by `_relaunch_for_frozen_knobs` so a relaunch
 # that fails to resolve the mismatch raises instead of looping.
@@ -40,24 +39,18 @@ _RELAUNCH_GUARD = "VULCAN3_CLI_RELAUNCHED"
 
 
 def _frozen_knob_mismatch(cfg):
-    """Import-frozen knobs `cfg` disagrees with, as ``{env var: value}``.
+    """Import-frozen knobs `cfg` disagrees with (`state._frozen_mismatch`), as
+    ``{env var: cfg's value}``.
 
-    Compares against `default_config()` because that is what the import-time
-    freeze read. `load_config` folds ``$VULCAN3_*`` over the YAML
-    before returning, so a knob the caller overrode explicitly matches the
-    frozen value and never appears here.
+    `load_config` folds ``$VULCAN3_*`` over the YAML before returning, so a
+    knob the caller overrode explicitly matches the frozen value and never
+    appears here.
     """
-    frozen = default_config()
-    mismatch = {}
-    for knob, env in _FROZEN_ENV.items():
-        want = getattr(cfg, knob, None)
-        have = getattr(frozen, knob, None)
-        if knob == "atom_list":
-            if list(want or ()) != list(have or ()):
-                mismatch[env] = ",".join(str(a) for a in want)
-        elif str(want) != str(have):
-            mismatch[env] = str(want)
-    return mismatch
+    return {
+        _FROZEN_ENV[knob]: (",".join(str(a) for a in cfg.atom_list)
+                            if knob == "atom_list" else str(getattr(cfg, knob)))
+        for knob in _frozen_mismatch(cfg)
+    }
 
 
 def _relaunch_for_frozen_knobs(cfg, config_ref):
@@ -129,8 +122,7 @@ def cli_main(argv=None):
     # Before any validation: a config naming a non-default network can only be
     # honored by a process that imported vulcan3 with it already selected.
     _relaunch_for_frozen_knobs(cfg, args.config)
-    validate_runtime_config(cfg)
-
+    # Validates cfg before any setup work.
     runstate = RunState.with_pre_loop_setup(cfg)
 
     dname = os.path.abspath(os.getcwd())

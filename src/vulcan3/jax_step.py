@@ -108,8 +108,8 @@ def _build_chem_projection_tables() -> tuple[
 ) = _build_chem_projection_tables()
 
 # atom_list baked into the projection tables above; import-frozen (the tables
-# are module constants). state._assert_atom_list_matches_import fails fast if
-# a later make_config passes a different atom_list.
+# are module constants). state._assert_frozen_knobs_match_import fails fast
+# if a later make_config passes a different atom_list.
 IMPORT_ATOM_LIST = tuple(_CFG.atom_list)
 
 

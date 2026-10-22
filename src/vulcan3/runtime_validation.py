@@ -3,27 +3,11 @@
 from __future__ import annotations
 
 import importlib.util
-import logging
 import math
-from pathlib import Path
-
-import numpy as np
 
 from . import chem_funs
 from ._paths import resolve_data_path
 from .config import _ELEMENT_RATIO_KEY
-
-logger = logging.getLogger(__name__)
-
-# Skips undeclared optional knobs and never supplies a numeric default;
-# test_runtime_validation_knobs.py pins that shipped configs declare them.
-_ABSENT = object()
-
-
-def _declared(cfg, key, cast=float):
-    """Cast a declared knob, or None when ``cfg`` does not declare it."""
-    v = getattr(cfg, key, _ABSENT)
-    return None if v is _ABSENT else cast(v)
 
 
 def _validate_abundance_preset(cfg) -> list[str]:
@@ -64,12 +48,13 @@ def _validate_abundance_preset(cfg) -> list[str]:
 def _validate_network_assets(cfg) -> list[str]:
     """Return a list of human-readable errors for missing network-linked assets.
 
-    Checks three things that produce cryptic downstream errors if wrong:
-    1. Every network species appears in the composition table (all_compose.txt).
-    2. Every photodissociation species has a cross-section file
-    (`<cross_folder><sp>/<sp>_cross.csv`).
-    3. cfg.atom_list entries are recognised column headers in all_compose.txt.
-    4. Every atom_list element outside loss_ex is carried by some network
+    Checks what produces cryptic downstream errors if wrong (a network species
+    missing from the composition table already fails `import
+    vulcan3.composition`):
+    1. Every photodissociation species has a cross-section file
+       (`<cross_folder><sp>/<sp>_cross.csv`).
+    2. cfg.atom_list entries are recognised column headers in all_compose.txt.
+    3. Every atom_list element outside loss_ex is carried by some network
        species: otherwise its initial column is 0 and the per-step atom_loss
        is 0/0 = NaN, which rejects every step down to dt_min and the run never
        converges (loss_ex elements are left out of that check).
@@ -84,19 +69,10 @@ def _validate_network_assets(cfg) -> list[str]:
     with open(com_path) as f:
         header = f.readline().split()
         rows = {r[0]: r[1:] for r in (line.split() for line in f) if r}
-    compose_species = set(rows)
     compose_atoms = set(header[1:])  # every column after 'species' (elements, 'e', 'mass')
-
-    # 1. Every network species must be in the composition table.
     net_name = getattr(cfg, "network", "")
-    for sp in chem_funs.spec_list:
-        if sp not in compose_species:
-            errors.append(
-                f"Species {sp!r} from network {net_name!r} is missing from "
-                f"{cfg.com_file}. Add a row for {sp!r} to the composition table."
-            )
 
-    # 2. Photo species need a cross-section file.
+    # 1. Photo species need a cross-section file.
     if bool(getattr(cfg, "use_photo", False)):
         cross_folder = resolve_data_path(getattr(cfg, "cross_folder", ""))
         for sp in chem_funs._NETWORK.photo_sp:
@@ -114,7 +90,7 @@ def _validate_network_assets(cfg) -> list[str]:
         if _ELEMENT_RATIO_KEY.fullmatch(key) and key[:-2] not in compose_atoms:
             errors.append(f"{key!r}: {key[:-2]!r} is not an element of {cfg.com_file}.")
 
-    # 3. Refuse atom_list entries not in the composition table header.
+    # 2. Refuse atom_list entries not in the composition table header.
     for atom in getattr(cfg, "atom_list", []):
         if atom not in compose_atoms:
             errors.append(
@@ -123,7 +99,7 @@ def _validate_network_assets(cfg) -> list[str]:
                 f"Update atom_list or add a column to the composition table."
             )
             continue
-        # 4. ... and must occur in at least one network species.
+        # 3. ... and must occur in at least one network species.
         if atom in getattr(cfg, "loss_ex", []):
             continue
         col = header.index(atom) - 1
@@ -147,8 +123,7 @@ def _validate_network_assets(cfg) -> list[str]:
     return errors
 
 
-# Knobs `_validate_numerical_bounds` checks; every shipped config declares
-# them (test_runtime_validation_knobs.py).
+# Knobs `_validate_numerical_bounds` checks.
 _FINITE_POSITIVE = ("Mp", "Rp", "rtol", "geom_conv_tol", "element_budget_tol")
 _COUNTERS = ("count_min", "count_max", "update_frq", "conv_step",
              "batch_max_retries", "ini_update_photo_frq", "final_update_photo_frq")
@@ -161,43 +136,42 @@ def _validate_numerical_bounds(cfg) -> list[str]:
     convergence, a non-finite state) is left to do so.
     """
     errors: list[str] = []
-    nz = _declared(cfg, "nz", int)
-    if nz is None or nz < 3:
+    nz = int(cfg.nz)
+    if nz < 3:
         errors.append(
-            f"nz={nz} must be declared and >= 3: with nz <= 2 the interface "
-            "grid is degenerate and the run completes on a meaningless column."
+            f"nz={nz} must be >= 3: with nz <= 2 the interface grid is "
+            "degenerate and the run completes on a meaningless column."
         )
-    P_b, P_t = _declared(cfg, "P_b"), _declared(cfg, "P_t")
-    if P_b is None or P_t is None or not P_b > P_t > 0.0:
+    P_b, P_t = float(cfg.P_b), float(cfg.P_t)
+    if not P_b > P_t > 0.0:
         errors.append(
             f"P_b={P_b} and P_t={P_t} (bottom and top pressure, dyne/cm^2) "
-            "must be declared with P_b > P_t > 0: inverted, the column has "
-            "negative thickness and still runs."
+            "must be P_b > P_t > 0: inverted, the column has negative "
+            "thickness and still runs."
         )
     # A NaN fails no `<= 0` test; gravity is G*Mp/Rp**2.
     for key in _FINITE_POSITIVE:
-        v = _declared(cfg, key)
+        v = float(getattr(cfg, key))
         # element_budget_tol .inf switches the budget term off (open columns).
         off = key == "element_budget_tol" and v == math.inf
-        if v is None or not ((math.isfinite(v) or off) and v > 0.0):
-            errors.append(f"{key}={v} must be declared, finite and > 0.")
-    dt_min, dt_max = _declared(cfg, "dt_min"), _declared(cfg, "dt_max")
-    if None not in (dt_min, dt_max) and not dt_min < dt_max:
+        if not ((math.isfinite(v) or off) and v > 0.0):
+            errors.append(f"{key}={v} must be finite and > 0.")
+    dt_min, dt_max = float(cfg.dt_min), float(cfg.dt_max)
+    if not dt_min < dt_max:
         errors.append(f"dt_min={dt_min:g} must be < dt_max={dt_max:g}.")
     # int32 in the runner; the cadences are modulo divisors there (x % 0
     # does not raise in XLA), and batch_max_retries 0 force-accepts every
     # rejected step.
     for key in _COUNTERS:
-        v = _declared(cfg, key)
-        if v is not None and not (math.isfinite(v) and v.is_integer()
-                                  and 1 <= v < 2**31):
+        v = float(getattr(cfg, key))
+        if not (math.isfinite(v) and v.is_integer() and 1 <= v < 2**31):
             errors.append(f"{key}={v:g} must be an integer in [1, 2**31).")
     # A unit slip (degrees, percent) runs on to a plausible wrong answer.
-    sl_angle = _declared(cfg, "sl_angle")
-    if sl_angle is not None and not 0.0 <= sl_angle < math.pi / 2.0:
+    sl_angle = float(cfg.sl_angle)
+    if not 0.0 <= sl_angle < math.pi / 2.0:
         errors.append(f"sl_angle={sl_angle:g} must be in [0, pi/2) radians.")
-    humidity = _declared(cfg, "humidity")
-    if humidity is not None and not 0.0 <= humidity <= 1.0:
+    humidity = float(cfg.humidity)
+    if not 0.0 <= humidity <= 1.0:
         errors.append(f"humidity={humidity:g} must be a fraction in [0, 1].")
     # The element budget is measured relative to H, and a loss_ex entry outside
     # atom_list would be ignored without a word.
@@ -246,9 +220,9 @@ def _validate_condensation(cfg) -> list[str]:
             "would silently be zero."
         )
 
-    start_ct = _declared(cfg, "start_conden_time")
-    stop_ct = _declared(cfg, "stop_conden_time")
-    if None not in (start_ct, stop_ct) and stop_ct < start_ct:
+    start_ct = float(cfg.start_conden_time)
+    stop_ct = float(cfg.stop_conden_time)
+    if stop_ct < start_ct:
         errors.append(
             f"stop_conden_time={stop_ct} < start_conden_time={start_ct}: the "
             "condensation window would never open."
@@ -385,78 +359,3 @@ def validate_runtime_config(cfg) -> None:
             "Unsupported or invalid VULCAN3 runtime configuration:\n- "
             + "\n- ".join(errors)
         )
-
-
-# One report per (network, T-grid signature, exposure) per process: repeated
-# rebuilds of the SAME case stay quiet, but a different profile on the same
-# network reports again: the exposure depends on Tco, not just the network.
-_TEMP_RANGE_REPORTED: set[tuple] = set()
-
-
-def rate_temp_range_exposure(net, Tco) -> dict:
-    """Count thermal rows evaluated outside their documented T ranges on `Tco`.
-
-    Coverage per row is the UNION of its documented ranges (lenient: a
-    Lindemann row's k0 and k_inf windows are OR'd, so this undercounts).
-    A bare measurement temperature parses as a degenerate (T, T) range, so
-    room-temperature-only rates count as out-of-range on hot profiles
-    rather than hiding in the no-range bucket.
-    """
-    T = np.asarray(Tco, dtype=np.float64)
-    no_range = any_outside = all_outside = 0
-    for ranges in (net.temp_ranges or {}).values():
-        if not ranges:
-            no_range += 1
-            continue
-        covered = np.zeros(T.shape, dtype=bool)
-        for lo, hi in ranges:
-            covered |= (T >= lo) & (T <= hi)
-        n_out = int(np.count_nonzero(~covered))
-        if n_out:
-            any_outside += 1
-            if n_out == T.size:
-                all_outside += 1
-    return {
-        "thermal_rows": len(net.temp_ranges or {}),
-        "no_range": no_range,
-        "any_outside": any_outside,
-        "all_outside": all_outside,
-    }
-
-
-def report_rate_temp_ranges(net, Tco) -> None:
-    """Log a one-time advisory on rate-law T-range exposure for this run.
-
-    The network files carry per-row documented temperature ranges (the free-
-    text `Temp` column) that neither VULCAN implementation enforces, so hot
-    or cold profiles silently extrapolate many fitted rates. Say so once per
-    distinct (network, T grid, exposure), against the ACTUAL model T grid.
-    Advisory only: no rate is altered or gated (VULCAN-master evaluates
-    every rate everywhere, and parity requires the same here).
-    """
-    if net.temp_ranges is None:
-        return
-    T = np.asarray(Tco, dtype=np.float64)
-    ex = rate_temp_range_exposure(net, T)
-    if not (ex["any_outside"] or ex["no_range"]):
-        return
-    key = (
-        str(net.network_path),
-        int(T.size),
-        round(float(T.min()), 1),
-        round(float(T.max()), 1),
-        ex["any_outside"],
-        ex["all_outside"],
-        ex["no_range"],
-    )
-    if key in _TEMP_RANGE_REPORTED:
-        return
-    _TEMP_RANGE_REPORTED.add(key)
-    logger.warning(
-        f"rate T-range advisory ({Path(net.network_path).name}): model grid "
-        f"spans {T.min():.0f}-{T.max():.0f} K over {T.size} layers; of "
-        f"{ex['thermal_rows']} thermal rows, {ex['any_outside']} are evaluated "
-        f"outside their documented T range in >=1 layer ({ex['all_outside']} in "
-        f"ALL layers) and {ex['no_range']} carry no parseable range. Advisory "
-        "only: no rate is altered (matches VULCAN-master)."
-    )

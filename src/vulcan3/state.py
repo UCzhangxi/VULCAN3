@@ -18,7 +18,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from . import chem_funs
-from .config import default_config
+from .config import _FROZEN_ENV, default_config
 from ._paths import resolve_data_path
 
 
@@ -172,9 +172,7 @@ class PhotoRuntimeInputs(NamedTuple):
     tau: jnp.ndarray  # (nz+1, nbin)
     aflux: jnp.ndarray  # (nz, nbin)
     sflux: jnp.ndarray  # (nz+1, nbin)
-    dflux_d: jnp.ndarray  # (nz+1, nbin)
     dflux_u: jnp.ndarray  # (nz+1, nbin)
-    prev_aflux: jnp.ndarray  # (nz, nbin)
     aflux_change: float
 
 
@@ -234,7 +232,7 @@ class RunState(NamedTuple):
     photo_static: Optional[PhotoStaticInputs] = None
 
     @staticmethod
-    def with_pre_loop_setup(cfg, *, skip_chem_warmup: bool = False) -> "RunState":
+    def with_pre_loop_setup(cfg) -> "RunState":
         """Build a fully-initialised `RunState` from a config.
 
         Runs the full pre-loop pipeline (atmosphere structure, rate constants
@@ -243,24 +241,17 @@ class RunState(NamedTuple):
         into the typed pytree. The canonical pre-loop entry point:
         ``rs = RunState.with_pre_loop_setup(cfg); rs = integ(rs)``.
 
-        `skip_chem_warmup=True` skips the chem-RHS JIT warmup (its result is
-        discarded; it only pre-compiles the codegen `chem_rhs`). Callers that
-        build the RunState in one process but integrate in another can skip
-        it; the returned RunState is otherwise identical.
-
         Fails fast on network/com_file/atom_list import-lock mismatches and on
         an invalid runtime configuration, then runs the pipeline with ``cfg``
         overlaid onto the process default so ``make_config()`` overrides are
         honored with zero leakage.
         """
-        _assert_network_matches_import(cfg)
-        _assert_com_file_matches_import(cfg)
-        _assert_atom_list_matches_import(cfg)
+        _assert_frozen_knobs_match_import(cfg)
         from .runtime_validation import validate_runtime_config
 
         validate_runtime_config(cfg)
         with _cfg_overlay(cfg):
-            return _build_pre_loop_runstate_impl(cfg, skip_chem_warmup=skip_chem_warmup)
+            return _build_pre_loop_runstate_impl(cfg)
 
 
 # Photolysis wavelength window (nm): the stellar-flux bin range is clamped to
@@ -422,19 +413,11 @@ def runstate_from_store(var, atm, para) -> RunState:
     )
 
     if bool(_cfg.use_photo) and hasattr(var, "tau"):
-        nbin = int(np.asarray(var.tau).shape[1])
-        prev_aflux = (
-            np.asarray(var.prev_aflux)
-            if hasattr(var, "prev_aflux")
-            else np.zeros((nz, nbin), dtype=np.float64)
-        )
         photo_runtime = PhotoRuntimeInputs(
             tau=jnp.asarray(var.tau, dtype=jnp.float64),
             aflux=jnp.asarray(var.aflux, dtype=jnp.float64),
             sflux=jnp.asarray(var.sflux, dtype=jnp.float64),
-            dflux_d=jnp.asarray(var.dflux_d, dtype=jnp.float64),
             dflux_u=jnp.asarray(var.dflux_u, dtype=jnp.float64),
-            prev_aflux=jnp.asarray(prev_aflux, dtype=jnp.float64),
             aflux_change=float(getattr(var, "aflux_change", 0.0)),
         )
     else:
@@ -536,76 +519,55 @@ def _same_file(want: str, have: str, what: str) -> bool:
         return True
 
 
-def _assert_network_matches_import(cfg) -> None:
-    """Fail fast if cfg requests a different network than the import-locked one.
+def _frozen_mismatch(cfg) -> dict[str, tuple]:
+    """The import-frozen knobs (`config._FROZEN_ENV`) on which `cfg` disagrees
+    with what the first `import vulcan3` loaded, as ``{knob: (requested,
+    import-time)}``. A file knob matches a byte-identical copy at another path.
 
-    The network (``ni``/``nr``/``spec_list`` + codegen RHS) is parsed once at
-    the first ``import vulcan3``; select another with
-    ``$VULCAN3_NETWORK`` before the first import (or the subprocess
-    driver). A byte-identical copy at another path passes.
-    """
-    want_path = str(Path(resolve_data_path(cfg.network)).resolve())
-    have_path = str(Path(chem_funs._NETWORK.network_path).resolve())
-    if _same_file(want_path, have_path, "network"):
-        return
-    raise ValueError(
-        "VULCAN3 reaction network is import-locked. It is parsed once at "
-        "the first `import vulcan3` and cannot be changed afterward.\n"
-        f"  import-time network : {have_path}\n"
-        f"  cfg.network requests: {want_path}\n"
-        "make_config(network=...) cannot hot-swap the network in-process. Set "
-        "the environment variable VULCAN3_NETWORK to the desired network "
-        "path BEFORE the first `import vulcan3` (or use the subprocess driver)."
-    )
-
-
-def _assert_com_file_matches_import(cfg) -> None:
-    """Fail fast if cfg requests a different composition table than the locked one.
-
-    The composition/mass table is read once into ``composition.py`` at the
-    first ``import vulcan3``, so a later ``make_config(com_file=...)``
-    cannot change it; without this guard a missing or different table is
-    silently ignored. A same-content copy at a different path is accepted.
+    The network (``ni``/``nr``/``spec_list`` and the codegen RHS), the
+    composition table (``composition.py``) and the reservoir-projection
+    tables (``jax_step``) are built from these once, at import.
     """
     from . import composition as _composition
-
-    have_r = str(Path(_composition.COM_FILE_PATH).resolve())
-    want_r = str(Path(resolve_data_path(cfg.com_file)).resolve())
-    if _same_file(want_r, have_r, "com_file"):
-        return
-    raise ValueError(
-        "VULCAN3 composition table (com_file) is import-locked. It is loaded "
-        "once into composition.py at the first `import vulcan3` and cannot be "
-        "changed afterward.\n"
-        f"  import-time com_file : {have_r}\n"
-        f"  cfg.com_file requests: {want_r}\n"
-        "make_config(com_file=...) cannot change it in-process (and a missing "
-        "file would otherwise be silently ignored). Set com_file in the config "
-        "used at the first `import vulcan3`."
-    )
-
-
-def _assert_atom_list_matches_import(cfg) -> None:
-    """Fail fast if cfg requests a different atom_list than the import-locked one.
-
-    The reservoir-projection tables in ``jax_step`` are built once at the
-    first ``import vulcan3``, so a later ``make_config(atom_list=...)``
-    would mix the import-time projection with cfg-time atom accounting; this
-    enforces the import-frozen contract instead of running the mix silently.
-    """
     from . import jax_step as _jax_step
 
-    cfg_atoms = cfg.atom_list
-    have = _jax_step.IMPORT_ATOM_LIST
-    if tuple(cfg_atoms) == tuple(have):
+    loaded = {
+        "network": chem_funs._NETWORK.network_path,
+        "com_file": _composition.COM_FILE_PATH,
+        "atom_list": _jax_step.IMPORT_ATOM_LIST,
+    }
+    out = {}
+    for knob in _FROZEN_ENV:
+        if knob == "atom_list":
+            want, have = list(cfg.atom_list), list(loaded[knob])
+            same = want == have
+        else:
+            want = str(Path(resolve_data_path(getattr(cfg, knob))).resolve())
+            have = str(Path(loaded[knob]).resolve())
+            same = _same_file(want, have, knob)
+        if not same:
+            out[knob] = (want, have)
+    return out
+
+
+def _assert_frozen_knobs_match_import(cfg) -> None:
+    """Fail fast if `cfg` requests a different network, com_file or atom_list
+    than the import-frozen one (`_frozen_mismatch`): ``make_config(...)``
+    cannot change them in-process, and running on would mix the import-time
+    tables with cfg-time accounting."""
+    bad = _frozen_mismatch(cfg)
+    if not bad:
         return
+    lines = "".join(
+        f"  {knob}: import-time {have}, cfg requests {want}\n"
+        for knob, (want, have) in bad.items()
+    )
+    envs = ", ".join(f"${_FROZEN_ENV[k]}" for k in bad)
     raise ValueError(
-        "VULCAN3 atom_list is import-locked. The reservoir-projection tables "
-        "are built once at the first `import vulcan3`, so a later "
-        "make_config(atom_list=...) cannot change them.\n"
-        f"  import-time atom_list : {list(have)}\n"
-        f"  cfg.atom_list requests: {list(cfg_atoms)}\n"
-        "Set atom_list in the config used at the first `import vulcan3`."
+        f"cfg changes the import-locked {', '.join(bad)}: VULCAN3 reads them "
+        f"once, at the first `import vulcan3`.\n{lines}"
+        f"Set {envs} (or the config used at that import) BEFORE the first "
+        "`import vulcan3`, or use the subprocess driver."
     )
 
 
@@ -650,7 +612,7 @@ def _cfg_overlay(cfg):
             delattr(base, name)
 
 
-def _build_pre_loop_runstate_impl(cfg, *, skip_chem_warmup: bool = False) -> RunState:
+def _build_pre_loop_runstate_impl(cfg) -> RunState:
     """Run the full pre-loop pipeline and return a populated RunState."""
     import time
 
@@ -673,10 +635,6 @@ def _build_pre_loop_runstate_impl(cfg, *, skip_chem_warmup: bool = False) -> Run
         atm = make_atm.apply_high_temp_cut(atm)
     if bool(cfg.use_condense):
         make_atm.sp_sat(atm)
-
-    from . import runtime_validation as _rv
-
-    _rv.report_rate_temp_ranges(chem_funs._NETWORK, np.asarray(atm.Tco))
 
     rate = _io.ReadRate()
     var = rate.read_rate(var, atm)
@@ -704,19 +662,6 @@ def _build_pre_loop_runstate_impl(cfg, *, skip_chem_warmup: bool = False) -> Run
         if bool(cfg.use_ion):
             solver.compute_Jion(var, atm)
         _rates_mod.apply_photo_remove(cfg, var, network)
-
-    # Warm up the codegen chem_rhs JIT so the first runner step doesn't stall
-    # on compile. Result discarded;
-    # `skip_chem_warmup` callers integrating in another process can skip it
-    # without changing the returned RunState.
-    if not skip_chem_warmup:
-        from . import make_chem_funs as _make_chem_funs
-
-        _chem_rhs = _make_chem_funs.build_chem_rhs(network)
-        _y0 = jnp.asarray(var.y, dtype=jnp.float64)
-        _M0 = jnp.asarray(atm.M, dtype=jnp.float64)
-        _k0 = jnp.asarray(var.k_arr, dtype=jnp.float64)
-        _chem_rhs(_y0, _M0, _k0).block_until_ready()
 
     # Mirror VULCAN master's initial Integration.backup() so the first
     # reject/force-accept path can revert to the real pre-step state.
@@ -789,9 +734,7 @@ def legacy_view(rs: RunState):
         var.tau = np.asarray(rs.photo_runtime.tau)
         var.aflux = np.asarray(rs.photo_runtime.aflux)
         var.sflux = np.asarray(rs.photo_runtime.sflux)
-        var.dflux_d = np.asarray(rs.photo_runtime.dflux_d)
         var.dflux_u = np.asarray(rs.photo_runtime.dflux_u)
-        var.prev_aflux = np.asarray(rs.photo_runtime.prev_aflux)
         var.aflux_change = float(rs.photo_runtime.aflux_change)
     if rs.photo_static is not None:
         var.nbin = int(rs.photo_static.nbin)

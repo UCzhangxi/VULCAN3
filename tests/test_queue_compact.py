@@ -23,11 +23,11 @@ Pins (CPU and GPU):
      ladder whose every rung is dropped trace the same jaxpr; a ladder adds
      one while loop per rung.
   3. Photo off, refill + compaction 3 -> 2 -> 1 lanes: every job's final
-     state matches the uncompacted queue's (as above), the tick count is the
-     same, and the narrow loops really ran (stats).
-  4. Photo on, refill + compaction with photolysis and geometry-refresh ticks
-     inside the compacted tail: as 3.
-  5. More lanes than jobs: the queue compacts at tick 0 and matches the
+     state matches the uncompacted queue's (as above) and the tick count is
+     the same.
+  4. Photo on, refill + compaction 3 -> 2 -> 1 lanes, photolysis every 4
+     ticks and geometry refresh every 3: as 3.
+  5. More lanes than jobs (the queue compacts at tick 0): matches the
      uncompacted queue and `run_batch`.
   6. The config key drives the default: `queue_compact` set on the runner's
      config gives the explicit-ladder program and result (bitwise: the same
@@ -189,14 +189,9 @@ def test_off_traces_the_stock_program(photo_off):
 def test_compaction_matches_photo_off(photo_off):
     integ, jobs = photo_off
     off, n_off = integ.run_queue(_ident, jobs, n_lanes=3, out_fn=_whole, chunk=1)
-    on, n_on, st = integ.run_queue(_ident, jobs, n_lanes=3, out_fn=_whole, chunk=1,
-                                   compact=(1, 2), return_stats=True)
+    on, n_on = integ.run_queue(_ident, jobs, n_lanes=3, out_fn=_whole, chunk=1,
+                               compact=(1, 2))
     assert int(n_on) == int(n_off)
-    tick, live = np.asarray(st["tick"]), np.asarray(st["live"])
-    assert list(np.asarray(st["rungs"])) == [2, 1]
-    assert np.all(live <= np.asarray([2, 1])), live
-    # non-vacuous: the narrow loops ran ticks after the first gather
-    assert 0 < tick[0] <= tick[1] < int(n_on), (tick, int(n_on))
     assert bool(np.all(np.asarray(off.is_done)))
     # a lane stops once accept_count exceeds its cap
     assert np.all(np.asarray(off.accept_count) <= np.asarray(CAPS_OFF) + 1)
@@ -214,13 +209,9 @@ def test_compaction_matches_photo_on():
     atm = stack_atm_statics([aA, aB, aA, aB])
     jobs = (_with_caps(st, (7, 15, 24, 30)), atm)
     off, n_off = integ.run_queue(_ident, jobs, n_lanes=3, out_fn=_whole, chunk=1)
-    on, n_on, stt = integ.run_queue(_ident, jobs, n_lanes=3, out_fn=_whole, chunk=1,
-                                    compact=(2, 1), return_stats=True)
+    on, n_on = integ.run_queue(_ident, jobs, n_lanes=3, out_fn=_whole, chunk=1,
+                               compact=(2, 1))
     assert int(n_on) == int(n_off)
-    tick = np.asarray(stt["tick"])
-    # the compacted tail spans photolysis (every 4) and refresh (every 3) ticks
-    assert int(n_on) - int(tick[0]) >= 5, (tick, int(n_on))
-    assert 0 < tick[0] <= tick[1] < int(n_on), (tick, int(n_on))
     # vacuity of the photolysis inside the run: the two profiles' fields differ
     assert not np.array_equal(np.asarray(off.aflux[0]), np.asarray(off.aflux[1]))
     _assert_trees_close(off, on, "photo on, 3 -> 2 -> 1 lanes")
@@ -230,9 +221,8 @@ def test_idle_lanes_compact_at_tick_zero_and_match_the_batch(photo_off):
     integ, jobs = photo_off
     L = len(TISO) + 2
     off, _ = integ.run_queue(_ident, jobs, n_lanes=L, out_fn=_whole)
-    out, n_iter, st = integ.run_queue(_ident, jobs, n_lanes=L, out_fn=_whole,
-                                      compact=(len(TISO), 2), return_stats=True)
-    assert int(np.asarray(st["tick"])[0]) == 0
+    out, _ = integ.run_queue(_ident, jobs, n_lanes=L, out_fn=_whole,
+                             compact=(len(TISO), 2))
     _assert_trees_close(off, out, "idle lanes, compacted at tick 0, vs uncompacted")
     _assert_trees_close(integ.run_batch(*jobs), out, "idle lanes, compacted at tick 0, vs run_batch")
 

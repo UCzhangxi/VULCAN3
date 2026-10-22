@@ -236,8 +236,8 @@ def test_refill_on_a_photo_tick_applies_photolysis_once():
     once, from its first step's own gate, as a plain-batch lane does at tick
     0. With the photo and geometry cadences at 1 every tick is on cadence, so
     the refilled job sees the ticks it would see alone and the two results
-    are bitwise equal. A second application at the refill moves prev_aflux
-    and aflux_change, and aflux_change gates the convergence certificate.
+    are bitwise equal. A second application at the refill moves
+    aflux_change, which gates the convergence certificate.
     """
 
     vulcan_cfg = _pin_cfg(ini_update_photo_frq=1, final_update_photo_frq=1,

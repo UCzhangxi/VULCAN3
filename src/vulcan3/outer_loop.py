@@ -83,12 +83,6 @@ _SLOPE_MIN_HP_FRAC = 0.1
 _SLOPE_MIN_CAP = 1e-8
 _SLOPE_MIN_FLOOR = 1e-10
 
-# A longdy counts as a new plateau minimum only below this fraction of the
-# running minimum (a 5% drop), so ULP-level jitter cannot reset
-# `count_since_new_min`. Hand-picked, JAX-only; the counter is a diagnostic
-# that feeds no stopping rule.
-_PLATEAU_NEW_MIN_FRAC = 0.95
-
 # Hybrid vm_mol phase-flip budget, vm_branch@84d010d stop(): count_min =
 # count + 100 on every flip (op.py:1107, 1128, 1152); count_max = count + 2000
 # after convergence (op.py:1108), count + 1000 after the runtime or
@@ -145,7 +139,7 @@ class JaxIntegState(NamedTuple):
 
     Shapes for the HD189 reference config: nz=150, ni=69, n_atoms=4,
     nbin=2588, n_br=48. Scalars are float64 unless noted; counts are
-    int32. When use_photo=False, tau/aflux/sflux/dflux_*/prev_aflux use placeholder shape (1, 1).
+    int32. When use_photo=False, tau/aflux/sflux/dflux_u use placeholder shape (1, 1).
     """
 
     y: jnp.ndarray  # (nz, ni)        current proposed state
@@ -170,9 +164,7 @@ class JaxIntegState(NamedTuple):
     tau: jnp.ndarray  # (nz+1, nbin)   optical depth
     aflux: jnp.ndarray  # (nz, nbin)     actinic flux
     sflux: jnp.ndarray  # (nz+1, nbin)   direct beam
-    dflux_d: jnp.ndarray  # (nz+1, nbin)   diffuse downward
     dflux_u: jnp.ndarray  # (nz+1, nbin)   diffuse upward (carries between calls)
-    prev_aflux: jnp.ndarray  # (nz, nbin)     prior aflux (for aflux_change)
     aflux_change: jnp.ndarray  # ()             max relative aflux change
 
     # Atmosphere geometry, refreshed at the end of an accepted iteration every
@@ -198,12 +190,6 @@ class JaxIntegState(NamedTuple):
     longdy: jnp.ndarray  # ()                  float64
     longdydt: jnp.ndarray  # ()                  float64
     where_varies_most: jnp.ndarray  # (nz, ni)            float64
-    longdy_seen_min: (
-        jnp.ndarray
-    )  # ()                  float64, running min of longdy across accepted steps
-    count_since_new_min: (
-        jnp.ndarray
-    )  # ()  int32, accepted steps since longdy reached a new minimum
     rtol: jnp.ndarray  # ()                  float64
     loss_criteria: jnp.ndarray  # ()                  float64
     update_photo_frq: jnp.ndarray  # ()                  int32
@@ -439,7 +425,7 @@ def _make_photo_branch(photo_static: _PhotoStatic):
 
         # Two-stream RT. `s.dflux_u` is the prior call's value (matches
         # op.py:2692, which reads dflux_u before the up-sweep at op.py:2693-2694).
-        aflux_new, sflux_new, dflux_d_new, dflux_u_new = _photo_mod.compute_flux_jax(
+        aflux_new, sflux_new, _, dflux_u_new = _photo_mod.compute_flux_jax(
             tau_new,
             sflux_top,
             s.ymix,
@@ -491,9 +477,8 @@ def _make_photo_branch(photo_static: _PhotoStatic):
                 f_diurnal,
             )
 
-        # aflux_change: mirrors op.py:2737 / op_jax.py:79-88.
-        # `s.aflux` here is the old aflux, used as `prev_aflux` in the ratio.
-        # After this branch, prev_aflux <- old aflux, aflux <- new.
+        # aflux_change: mirrors op.py:2737 / op_jax.py:79-88. `s.aflux` here
+        # is the old aflux, master's `prev_aflux` in the ratio.
         mask = aflux_new > flux_atol
         diff = jnp.abs(aflux_new - s.aflux)
         ratio = jnp.where(
@@ -506,9 +491,7 @@ def _make_photo_branch(photo_static: _PhotoStatic):
             tau=tau_new,
             aflux=aflux_new,
             sflux=sflux_new,
-            dflux_d=dflux_d_new,
             dflux_u=dflux_u_new,
-            prev_aflux=s.aflux,
             aflux_change=aflux_change_new,
         )
 
@@ -677,16 +660,16 @@ class _Statics(NamedTuple):
 # pre-step `evo_idx`.
 _CONV_RING_FIELDS = ("y_time_ring", "t_time_ring")
 _EVO_RING_FIELDS = ("y_evo", "t_evo")
-# Certificate-only lane fields: the convergence ring, its two statistics, the
-# cell it points at and the photolysis-change reference. They steer predicates,
-# never the arithmetic, so their tangents are dead. The lockstep batch drops
+# Certificate-only lane fields: the convergence ring, its two statistics and
+# the cell it points at. They steer predicates, never the arithmetic, so their
+# tangents are dead. The lockstep batch drops
 # them on its own; the queue's refill `cond` rewrites lane state and keeps them
 # (D tangent copies of the conv_step-slot ring per lane), so `runner_queue`
 # zeroes them at its lane step. Every primal and every live tangent stays
 # bitwise. `_make_jvp_step` (run_jvp) is untouched: its certificate reads
 # the ring tangent.
 _QUEUE_STOP_FIELDS = _CONV_RING_FIELDS + (
-    "longdy", "longdydt", "where_varies_most", "prev_aflux",
+    "longdy", "longdydt", "where_varies_most",
 )
 
 
@@ -1291,29 +1274,6 @@ def _make_runner(
             where_varies_most_new,
             s.where_varies_most,
         )
-        # Plateau counters, read by vulcan-forward's ConvDiag (the hybrid
-        # flip resets them). Gate on master's ready predicate (op.py:1069) so
-        # the early transient never counts.
-        plateau_ready = (s.t > jnp.float64(statics.trun_min)) & (
-            accept_count_next > s.count_min_dyn
-        )
-        significant_drop = (
-            do_accept
-            & plateau_ready
-            & (longdy_next < s.longdy_seen_min * jnp.float64(_PLATEAU_NEW_MIN_FRAC))
-        )
-        longdy_seen_min_next = jnp.where(
-            significant_drop, longdy_next, s.longdy_seen_min
-        )
-        count_since_new_min_next = jnp.where(
-            significant_drop,
-            jnp.int32(0),
-            jnp.where(
-                do_accept & plateau_ready,
-                s.count_since_new_min + jnp.int32(1),
-                s.count_since_new_min,
-            ),
-        )
 
         # Certificate candidate: `_convergence_ok` on this step's longdy. The
         # refresh below is forced on it, and geom_ok records whether
@@ -1321,9 +1281,7 @@ def _make_runner(
         # pre-refresh value; the certificate re-reads the refreshed one next
         # iteration.
         s_cand = s._replace(longdy=longdy_next, longdydt=longdydt_next,
-                            t=t_next, accept_count=accept_count_next,
-                            longdy_seen_min=longdy_seen_min_next,
-                            count_since_new_min=count_since_new_min_next)
+                            t=t_next, accept_count=accept_count_next)
         is_conv_cand = _convergence_ok(s_cand, statics)
         ready_after = (t_next > jnp.float64(statics.trun_min)) & (
             accept_count_next > s.count_min_dyn
@@ -1487,12 +1445,6 @@ def _make_runner(
             )
             longdy_next = jnp.where(do_flip, jnp.float64(jnp.inf), longdy_next)
             longdydt_next = jnp.where(do_flip, jnp.float64(jnp.inf), longdydt_next)
-            longdy_seen_min_next = jnp.where(
-                do_flip, jnp.float64(jnp.inf), longdy_seen_min_next
-            )
-            count_since_new_min_next = jnp.where(
-                do_flip, jnp.int32(0), count_since_new_min_next
-            )
 
         # Adaptive rtol (accepted steps only): periodic decrease while
         # |atom_loss| >= loss_criteria; periodic increase below a lower
@@ -1603,8 +1555,6 @@ def _make_runner(
             longdy=longdy_next,
             longdydt=longdydt_next,
             where_varies_most=where_varies_most_next,
-            longdy_seen_min=longdy_seen_min_next,
-            count_since_new_min=count_since_new_min_next,
             hybrid_use_vm=hybrid_use_vm_next,
             count_min_dyn=count_min_dyn_next,
             count_max_dyn=count_max_dyn_next,
@@ -1883,8 +1833,7 @@ def _make_runner(
         )
         return final_b
 
-    def runner_queue(jobs, n_lanes, chunk, init_fn, out_fn, compact=(),
-                     stats=False):
+    def runner_queue(jobs, n_lanes, chunk, init_fn, out_fn, compact=()):
         """The loop behind `OuterLoop.run_queue` (contract there).
 
         Finished lanes are written out and refilled inside this one while
@@ -1897,15 +1846,14 @@ def _make_runner(
         step on the previous occupant's RT state.
 
         `compact` (`_queue_compact_rungs`: descending widths below
-        `n_lanes`) adds tail compaction; `()` is the loop above, unchanged.
+        `n_lanes`) adds tail compaction; `()` is one loop to the end.
         Once every job has been handed to a lane and the live lanes (holding
         a job, not done) fit the next rung, the loop exits and the live lanes
         are gathered into a carry of that width, which runs the same loop
         body from the same tick (nothing is pending, so it never refills),
         and so on down the ladder.
         The done lanes still holding a job are written out at the gather with
-        the frozen state the final flush would write. `stats=True` also
-        returns, per rung, the tick and the live-lane count at its gather.
+        the frozen state the final flush would write.
         """
         sizes = {
             jnp.shape(x)[0]
@@ -2063,17 +2011,6 @@ def _make_runner(
             live = jnp.logical_not(lanes.is_done) & (lane_job >= 0)
             return (nxt < jnp.int32(n_jobs)) | jnp.any(live)
 
-        if not compact:
-            it, lanes, _atm_l, lane_job, _nxt, out = jax.lax.while_loop(
-                cond, body, (jnp.int32(0), lanes, atm_l, lane_job, nxt, out)
-            )
-            # Flush the lanes still holding a job when the loop ended.
-            out = write_out(out, lanes, j0, lane_job, lane_job >= 0)
-            if stats:
-                none = jnp.zeros((0,), jnp.int32)
-                return out, it, {"rungs": none, "tick": none, "live": none}
-            return out, it
-
         # ---- tail compaction (see the docstring)
         def n_live(lanes, lane_job):
             return jnp.sum(
@@ -2112,17 +2049,14 @@ def _make_runner(
             lane_job = jnp.where(keep, lane_job[sel], jnp.int32(-1))
             return (it, lanes, atm_l, lane_job, nxt, out)
 
+        ladder = tuple(compact) + (None,)
         c = jax.lax.while_loop(
-            until(compact[0]), body, (jnp.int32(0), lanes, atm_l, lane_job, nxt, out)
+            until(ladder[0]), body, (jnp.int32(0), lanes, atm_l, lane_job, nxt, out)
         )
-        entry_tick, entry_live = [], []
         width = n_lanes
-        for k, rung in enumerate(compact):
-            entry_tick.append(c[0])
-            entry_live.append(n_live(c[1], c[3]))
+        for rung, nxt_rung in zip(compact, ladder[1:]):
             c = gather(c, width, rung)
             width = rung
-            nxt_rung = compact[k + 1] if k + 1 < len(compact) else None
             # The tail loops run `body` itself. With nothing pending its
             # refill cond is never taken, but it is what lets the lane
             # step's carry alias the loop's: a body that hands the lane
@@ -2131,14 +2065,9 @@ def _make_runner(
             # convergence ring twice (job 93269: 20% of a 264-lane tick).
             c = jax.lax.while_loop(until(nxt_rung), body, c)
         it, lanes, _atm_l, lane_job, _nxt, out = c
-        out = write_out(out, lanes, jnp.arange(width, dtype=jnp.int32), lane_job,
-                        lane_job >= 0)
-        if stats:
-            return out, it, {
-                "rungs": jnp.asarray(compact, jnp.int32),
-                "tick": jnp.stack(entry_tick),
-                "live": jnp.stack(entry_live),
-            }
+        # Flush the lanes still holding a job when the last loop ended.
+        lane_ix = j0 if width == n_lanes else jnp.arange(width, dtype=jnp.int32)
+        out = write_out(out, lanes, lane_ix, lane_job, lane_job >= 0)
         return out, it
 
     return runner, runner_chunk, runner_batch, runner_queue, _make_runner_jvp
@@ -2155,9 +2084,7 @@ _PHOTO_FIELDS = (
     "tau",
     "aflux",
     "sflux",
-    "dflux_d",
     "dflux_u",
-    "prev_aflux",
     "aflux_change",
 )
 
@@ -2804,9 +2731,7 @@ class OuterLoop:
                 tau=tiny,
                 aflux=tiny,
                 sflux=tiny,
-                dflux_d=tiny,
                 dflux_u=tiny,
-                prev_aflux=tiny,
                 aflux_change=jnp.float64(0.0),
             )
         pr = rs.photo_runtime
@@ -2815,9 +2740,7 @@ class OuterLoop:
             tau=jnp.asarray(pr.tau, dtype=jnp.float64),
             aflux=jnp.asarray(pr.aflux, dtype=jnp.float64),
             sflux=jnp.asarray(pr.sflux, dtype=jnp.float64),
-            dflux_d=jnp.asarray(pr.dflux_d, dtype=jnp.float64),
             dflux_u=jnp.asarray(pr.dflux_u, dtype=jnp.float64),
-            prev_aflux=jnp.asarray(pr.prev_aflux, dtype=jnp.float64),
             aflux_change=jnp.float64(float(pr.aflux_change)),
         )
 
@@ -2850,8 +2773,6 @@ class OuterLoop:
                 rs.params.where_varies_most,
                 dtype=jnp.float64,
             ),
-            longdy_seen_min=jnp.float64(jnp.inf),
-            count_since_new_min=jnp.int32(0),
             rtol=jnp.float64(float(self._cfg.rtol)),
             loss_criteria=jnp.float64(float(self._cfg.loss_criteria)),
             update_photo_frq=jnp.int32(ini_frq),
@@ -3139,9 +3060,7 @@ class OuterLoop:
                 tau=jnp.asarray(state.tau, dtype=jnp.float64),
                 aflux=jnp.asarray(state.aflux, dtype=jnp.float64),
                 sflux=jnp.asarray(state.sflux, dtype=jnp.float64),
-                dflux_d=jnp.asarray(state.dflux_d, dtype=jnp.float64),
                 dflux_u=jnp.asarray(state.dflux_u, dtype=jnp.float64),
-                prev_aflux=jnp.asarray(state.prev_aflux, dtype=jnp.float64),
                 aflux_change=float(state.aflux_change),
             )
         else:
@@ -3387,7 +3306,7 @@ class OuterLoop:
         return self._vrunner(states_batched, atm_static_batched)
 
     def run_queue(self, init_fn, jobs, n_lanes, out_fn, *, chunk=_QUEUE_REFILL_CHUNK,
-                  compact=None, return_stats=False):
+                  compact=None):
         """Integrate `n_jobs` independent profiles on `n_lanes` lanes with refill.
 
         `init_fn(job) -> (JaxIntegState, AtmStatic)` builds one job's initial
@@ -3418,9 +3337,7 @@ class OuterLoop:
         result is the uncompacted one, bitwise wherever the compiled step's
         per-lane arithmetic does not depend on the width (the GPU validation
         checks it). Rungs at or above `n_lanes` are dropped; each rung used
-        adds one compiled loop to the program. `return_stats=True` returns
-        `(out, n_iter, stats)` with, per rung used, the tick and live-lane
-        count at its gather.
+        adds one compiled loop to the program.
         """
         if self._runner_queue is None:
             raise RuntimeError(
@@ -3432,7 +3349,7 @@ class OuterLoop:
         if compact is None:
             compact = getattr(self._cfg, "queue_compact", None)
         rungs = _queue_compact_rungs(compact, n_lanes)
-        key = (init_fn, out_fn, int(n_lanes), int(chunk), rungs, bool(return_stats))
+        key = (init_fn, out_fn, int(n_lanes), int(chunk), rungs)
         fn = self._vrunner_queue.get(key)
         if fn is None:
             if rungs:
@@ -3446,7 +3363,6 @@ class OuterLoop:
                     init_fn=init_fn,
                     out_fn=out_fn,
                     compact=rungs,
-                    stats=bool(return_stats),
                 )
             )
             self._vrunner_queue[key] = fn

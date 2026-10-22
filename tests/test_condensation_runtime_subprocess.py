@@ -105,7 +105,7 @@ import copy
 from vulcan3.state import legacy_view
 cfg.use_sat_surfaceH2O = True
 for c in (cfg, copy.deepcopy(cfg)):
-    rs = RunState.with_pre_loop_setup(c, skip_chem_warmup=True)
+    rs = RunState.with_pre_loop_setup(c)
     var, atm, _ = legacy_view(rs)
     st = outer_loop.OuterLoop(op_jax.Ros2JAX(), op.Output(cfg=c), cfg=c)._build_statics(var, atm)
     pins = {sl[int(i)]: float(m) for i, m in

@@ -108,8 +108,9 @@ PYEOF
   # ---------------- VULCAN-JAX 3.0, fresh subprocess + empty XLA cache (Table 1's protocol)
   J="$OUT/jax_$P"; mkdir -p "$J"
   # One chunk: the CLI otherwise syncs and prints every print_prog_num steps,
-  # and Table 1 times the uninterrupted loop.
-  { cat "$JAX_REPO/src/vulcan3/configs/$P.yaml"; echo "print_prog_num: 1000000000"; } > "$J/$P.yaml"
+  # and Table 1 times the uninterrupted loop. A config that sets no knob is
+  # the empty mapping `{}` (HD189.yaml); the appended key replaces it.
+  { sed '/^{}$/d' "$JAX_REPO/src/vulcan3/configs/$P.yaml"; echo "print_prog_num: 1000000000"; } > "$J/$P.yaml"
   read -r j_real j_user j_sys < <(cd "$J" && \
     JAX_COMPILATION_CACHE_DIR="$J/xlacache" \
     VULCAN3_NETWORK="$JAX_REPO/src/vulcan3/$(net_for "$P")" \

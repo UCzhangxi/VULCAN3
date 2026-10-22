@@ -79,7 +79,7 @@ def test_photo_branch_matches_python_photo_path():
     dyn_dz_err = relerr(dynamic_final.tau, tau_dynamic_ref, floor=UNDERFLOW_DENOM)
     assert dyn_dz_err <= PHOTO_RTOL, "photo branch did not use dynamic state.dz"
 
-    for name in ("tau", "aflux", "sflux", "dflux_d", "dflux_u", "prev_aflux"):
+    for name in ("tau", "aflux", "sflux", "dflux_u"):
         err = relerr(getattr(final_state, name), getattr(data_var, name),
                      floor=UNDERFLOW_DENOM)
         assert err <= PHOTO_RTOL, f"{name} relerr {err:.3e}"

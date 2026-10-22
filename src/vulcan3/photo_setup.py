@@ -517,7 +517,6 @@ def _alloc_runtime_buffers(var, nbin: int, nz: int) -> None:
     """Zero-allocate the host-side runtime mutable buffers on `var`."""
     var.sflux = np.zeros((nz + 1, nbin), dtype=np.float64)
     var.dflux_u = np.zeros((nz + 1, nbin), dtype=np.float64)
-    var.dflux_d = np.zeros((nz + 1, nbin), dtype=np.float64)
     var.aflux = np.zeros((nz, nbin), dtype=np.float64)
     var.tau = np.zeros((nz + 1, nbin), dtype=np.float64)
     var.sflux_top = np.zeros(nbin, dtype=np.float64)

@@ -19,6 +19,7 @@ thermochemistry. Its tangent is zero, and a batched lane equals the solo seed bi
 
 from __future__ import annotations
 
+import functools
 import logging
 import pickle
 from pathlib import Path
@@ -168,45 +169,27 @@ def seed_elements() -> tuple[str, ...]:
 # cap.
 _SEED_METHOD = "scan_hot_from_bottom"
 
-_OPTIONS_CACHE: dict[tuple[float, int], EquilibriumOptions] = {}
-_SEED_JIT: dict[tuple[float, int], object] = {}
-
-
 def _seed_key() -> tuple[float, int]:
     """The config's solver controls, read at call time (`_cfg_overlay`)."""
     return (float(_CFG.fastchem_newton_tol), int(_CFG.fastchem_newton_max_iter))
 
 
-def _seed_options() -> EquilibriumOptions:
-    """Solver options for the current config, interned.
+@functools.cache
+def _seed_controls(tol: float, max_iter: int) -> tuple[EquilibriumOptions, object]:
+    """`(options, eq_seed jitted)` for one set of solver controls, interned.
 
     ExoGibbs keys its scan-body cache on `id(options)`, so a fresh dataclass
-    per call would rebuild the profile scan every time.
+    per call would rebuild the profile scan every time. `eq_seed` reads the
+    tolerance and the iteration cap at trace time, and JAX keys its trace
+    cache on the traced function plus the argument shapes -- not on our key
+    -- so `jax.jit(eq_seed)` under a new key would reuse the trace that baked
+    in the old controls. A fresh closure per key is a fresh cache entry.
+    Without the jit the host path re-traces the scan on every call.
     """
     from exogibbs.api.gas import EquilibriumOptions
 
-    key = _seed_key()
-    if key not in _OPTIONS_CACHE:
-        _OPTIONS_CACHE[key] = EquilibriumOptions(
-            epsilon_crit=key[0], max_iter=key[1], method=_SEED_METHOD
-        )
-    return _OPTIONS_CACHE[key]
-
-
-def _seed_jit():
-    """`eq_seed` jitted, one wrapper per set of solver controls.
-
-    `eq_seed` reads the tolerance and the iteration cap at trace time, and
-    JAX keys its trace cache on the traced function plus the argument shapes
-    -- not on our key -- so `jax.jit(eq_seed)` under a new key would reuse the
-    trace that baked in the old controls. A fresh closure per key is a fresh
-    cache entry. Without the jit the host path re-traces the scan on every
-    call.
-    """
-    key = _seed_key()
-    if key not in _SEED_JIT:
-        _SEED_JIT[key] = jax.jit(lambda Tco, p_bar, b: eq_seed(Tco, p_bar, b))
-    return _SEED_JIT[key]
+    options = EquilibriumOptions(epsilon_crit=tol, max_iter=max_iter, method=_SEED_METHOD)
+    return options, jax.jit(lambda Tco, p_bar, b: eq_seed(Tco, p_bar, b))
 
 
 @jax.custom_jvp
@@ -234,7 +217,7 @@ def _solve_profile(Tco, p_bar, b):
         jnp.asarray(p_bar, dtype=jnp.float64),
         jnp.asarray(b, dtype=jnp.float64),
         Pref=1.0,
-        options=_seed_options(),
+        options=_seed_controls(*_seed_key())[0],
         return_diagnostics=True,
     )
 
@@ -473,9 +456,8 @@ def eq_column(pco, Tco, M) -> np.ndarray:
             if sp in seed_elements()
         )
     )
-    ymix = np.asarray(
-        _seed_jit()(jnp.asarray(Tco), jnp.asarray(p_bar), jnp.asarray(b))
-    )
+    seed_jit = _seed_controls(*_seed_key())[1]
+    ymix = np.asarray(seed_jit(jnp.asarray(Tco), jnp.asarray(p_bar), jnp.asarray(b)))
     if not np.isfinite(ymix).all():
         conv = np.asarray(_solve_profile(Tco, p_bar, b)[1]["converged"])
         bad = np.flatnonzero(~conv)

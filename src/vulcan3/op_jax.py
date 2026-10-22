@@ -58,7 +58,7 @@ class Ros2JAX:
         """Two-stream Eddington RT. Reads var.dflux_u from prior call."""
         static = self._ensure_photo_static(var, atm)
         ag0 = float(_phy_const.ag0)
-        aflux_j, sflux_j, dfd_j, dfu_j = _photo_mod.compute_flux_jax(
+        aflux_j, sflux_j, _, dfu_j = _photo_mod.compute_flux_jax(
             jnp.asarray(var.tau),
             jnp.asarray(var.sflux_top),
             jnp.asarray(var.ymix),
@@ -74,7 +74,6 @@ class Ros2JAX:
         var.prev_aflux = np.copy(var.aflux)
         var.aflux = np.asarray(aflux_j, dtype=np.float64)
         var.sflux = np.asarray(sflux_j, dtype=np.float64)
-        var.dflux_d = np.asarray(dfd_j, dtype=np.float64)
         var.dflux_u = np.asarray(dfu_j, dtype=np.float64)
         mask = var.aflux > _CFG.flux_atol
         if np.any(mask):

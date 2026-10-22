@@ -137,8 +137,6 @@ python tools/audit_master_parity.py --master $VULCAN_MASTER_DIR
 ### Certificates and differentiation
 
 - A run ends only on the certificate or a cap (`use_conv_stall` is refused).
-  The plateau counters are diagnostics that no consumer reads; they feed no
-  predicate.
 - The certificate has two terms not in VULCAN 2.0, both inert below
   `count_min`. Geometry (C21): on a certificate candidate the runner refreshes
   the geometry whatever `update_frq` says and ends only if mu/g/Hp/dzi/Hpi moved

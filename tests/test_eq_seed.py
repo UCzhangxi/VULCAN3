@@ -65,8 +65,10 @@ abundance = sys.argv[4]
 os.chdir(root)
 
 # The network is import-frozen: set $VULCAN3_* from the config's own keys
-# BEFORE importing vulcan3 so a non-default network is parsed.
-raw = yaml.safe_load((root / "configs" / f"{config_name}.yaml").read_text())
+# (over default.yaml, as load_config reads it) BEFORE importing vulcan3 so a
+# non-default network is parsed.
+raw = {**yaml.safe_load((root / "configs" / "default.yaml").read_text()),
+       **yaml.safe_load((root / "configs" / f"{config_name}.yaml").read_text())}
 os.environ["VULCAN3_NETWORK"] = raw["network"]
 os.environ["VULCAN3_ATOM_LIST"] = ",".join(raw["atom_list"])
 os.environ["VULCAN3_COM_FILE"] = raw["com_file"]
@@ -415,19 +417,20 @@ def test_solver_controls_force_a_retrace() -> None:
     b = ini_abun._element_vector()
     args = (jnp.asarray(Tco), jnp.asarray(p_bar), jnp.asarray(b))
 
+    def seed_jit():
+        return ini_abun._seed_controls(*ini_abun._seed_key())[1]
+
     cfg = default_config()
-    warm = np.asarray(ini_abun._seed_jit()(*args))
+    warm = np.asarray(seed_jit()(*args))
     assert np.isfinite(warm).all(), "the shipped controls must converge"
 
     keep = cfg.fastchem_newton_max_iter
     cfg.fastchem_newton_max_iter = 1
     try:
-        one = np.asarray(ini_abun._seed_jit()(*args))
+        one = np.asarray(seed_jit()(*args))
     finally:
-        key = (float(cfg.fastchem_newton_tol), 1)
         cfg.fastchem_newton_max_iter = keep
-        ini_abun._SEED_JIT.pop(key, None)
-        ini_abun._OPTIONS_CACHE.pop(key, None)
+        ini_abun._seed_controls.cache_clear()
 
     seeded = ini_abun._seed()[1]
     assert np.isnan(one[:, seeded]).all(), (

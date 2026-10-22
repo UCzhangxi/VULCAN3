@@ -7,12 +7,11 @@ the `custom_linear_solve` tangent agrees with differentiating through the LU
 and its linearised residual is never worse, reverse mode (steady_state_grad's
 `jax.vjp` through the step) agrees, and vmap is consistent. Random systems at
 the VULCAN shape, then the real HD189 blocks at four dt (the W39b blocks in a
-SNCHO child, slow-gated like the other W39b children). On a CUDA host both GPU
-factor kernels (Gauss-Jordan and LU) and the solve are also checked against the
-CPU kernel on pivoting, tied, singular and extreme-range blocks, against each
-other on the real blocks (the Gauss-Jordan pivot step's first layer byte for
-byte the LU kernel's, the division fallback included), and, opt-in, under
-compute-sanitizer.
+SNCHO child, slow-gated like the other W39b children). On a CUDA host the GPU
+factor (Gauss-Jordan) and solve are also checked against the CPU kernel on
+pivoting, tied, singular and extreme-range blocks and on the real blocks, and,
+opt-in, under compute-sanitizer. A network wider than the CUDA kernel takes is
+refused before anything launches (checked without a GPU).
 """
 
 from __future__ import annotations
@@ -46,8 +45,8 @@ ROOT = Path(__file__).resolve().parent.parent
 DTS = (1e2, 3.8e4, 1e6, 1e11)
 # CUDA kernel against the CPU kernel, normwise over the finite entries; they
 # differ by reassociation and FMA contraction (measured up to 2.2e-14 here).
-# The bar of the LU factor, of the Gauss-Jordan factor's first layer (the same
-# partial-pivot sweep) and of the solve on either.
+# The bar of the Gauss-Jordan factor's first layer (the CPU kernel's
+# partial-pivot sweep).
 KERNEL_RTOL = 1e-13
 # The Gauss-Jordan factor beyond its first layer, and the solution on it: the
 # Schur complements carry its inverse instead of the CPU kernel's LU
@@ -55,27 +54,11 @@ KERNEL_RTOL = 1e-13
 # <= 4e3 on KERNEL_CASES; a matrix-level numpy emulation reads up to 5.2e-14
 # on `tie`, before the GPU's own FMA and reassociation).
 GJ_KERNEL_RTOL = 1e-12
-# The CUDA factor kernels VULCAN3_BT_FACTOR forces; unset, a call runs the
-# Gauss-Jordan one up to GJ_MAX_NI (block_thomas_cuda.cu kGjMaxNi) and the LU
-# one above. The variable is read once per process, so each runs in a child.
-FACTOR_VARIANTS = ("gj", "lu")
+# The widest block the CUDA kernel takes (block_thomas_cuda.cu kGjMaxNi).
 GJ_MAX_NI = 96
 # (nz, ni, kind) of `_kernel_case` compared with the CPU kernel.
 KERNEL_CASES = [(1, 5, "random"), (3, 16, "random"), (4, 33, "random"), (6, 64, "random"),
                 (3, 16, "tie"), (3, 16, "singular"), (3, 16, "huge")]
-# ... and run in the same children for the Gauss-Jordan pivot step only: `tiny`
-# leaves one equation's diagonal-block row 2^-975 smaller than its coupling and
-# rhs, so x reaches ~1e277 and is not determined (two GEPP kernels, the CPU and
-# the CUDA LU one included, differ in it at O(1)); its factors still are.
-GUARD_CASES = [(3, 16, "tiny")]
-# The Gauss-Jordan pivot step takes its multipliers v / piv as the IEEE 1 / piv
-# times v with two FMA corrections while |piv| <= 2^1000 and |v|, |v / piv| >=
-# 2^-960 (block_thomas_cuda.cu kGjRcp*), and divides outside that range.
-GJ_RCP_PIV_MAX, GJ_RCP_QUOT_MIN = 2.0**1000, 2.0**-960
-# ... and on both sides of GJ_MAX_NI, for the factor choice: blocks of cond up to
-# ~2e5, where two correct kernels differ by more than KERNEL_RTOL, so these are
-# judged by residual.
-CHOICE_CASES = [(2, GJ_MAX_NI, "random"), (2, GJ_MAX_NI + 1, "random")]
 
 
 @pytest.fixture(params=["fast", "ffi"])
@@ -151,10 +134,10 @@ def compare(diag, sup, sub, rhs, tans, seed=1):
 
 
 def test_fast_matches_reference_on_random_system(fast):
-    # ni 97, the DMS network and the widest shipped: the CUDA solve's 4 register rows per lane
-    # and, above GJ_MAX_NI, the LU factor kernel
-    diag, sup, sub, rhs = _system(120, 97, 42, boost=1e10, scale=1e-3)
-    tans = _system(120, 97, 43, boost=0.0, scale=1e-3)
+    # ni 96, the widest the CUDA kernel takes: the full Gauss-Jordan tile and the
+    # solve's 3 register rows per lane
+    diag, sup, sub, rhs = _system(120, GJ_MAX_NI, 42, boost=1e10, scale=1e-3)
+    tans = _system(120, GJ_MAX_NI, 43, boost=0.0, scale=1e-3)
     r = compare(diag, sup, sub, rhs, tans)
     if fast.BACKEND == "fast":
         assert r["primal_equal"], r
@@ -215,10 +198,10 @@ def _cuda_device():
 def _kernel_case(nz, ni, kind):
     """Blocks without a diagonal boost, so rows swap. `tie`: rows 2 and 5 tie
     for the first pivot (bit-equal |a|). `singular`: a duplicated row gives a
-    zero pivot. `huge`: row 7, scaled by 2^1003, is the first pivot, beyond
-    GJ_RCP_PIV_MAX. `tiny`: row 3, scaled by 2^-975, gives multiplier
-    numerators below GJ_RCP_QUOT_MIN until it is pivoted (and 1e294 entries in
-    the next layer; see GUARD_CASES). Both stay finite through the sweep."""
+    zero pivot. `huge`: row 7, scaled by 2^1003, is the first pivot, beyond the
+    2^1000 up to which the Gauss-Jordan pivot step multiplies by 1 / piv
+    (block_thomas_cuda.cu kGjRcpPivMax), so the warp divides; it stays finite
+    through the sweep."""
     d, s, c, r = (np.array(a) for a in _system(nz, ni, ni, boost=0.0, scale=1.0))
     if kind == "tie":
         d[0, 2, 0] = 10.0 * np.abs(d[0, :, 0]).max()
@@ -229,8 +212,6 @@ def _kernel_case(nz, ni, kind):
     elif kind == "huge":
         d[0, 7, 0] = 3.0 * np.abs(d[0, :, 0]).max()
         d[0, 7] *= 2.0**1003
-    elif kind == "tiny":
-        d[0, 3] *= 2.0**-975
     return d, s, c, r
 
 
@@ -243,50 +224,6 @@ def _kernel_run(device, d, s, c, r):
     xs = jax.jit(jax.vmap(fast_mod._ffi_solve, in_axes=(None, None, None, None, 0)))(
         lu, perm, a[1], a[2], a[4])
     return [np.asarray(v) for v in (lu, perm, x, xs)]
-
-
-_RUN_KEYS = ("lu", "perm", "x", "xs")
-_FACTOR_CHILD = r"""
-import os, sys
-import numpy as np
-repo, out = sys.argv[1:3]
-sys.path.insert(0, os.path.join(repo, "tests"))
-import jax
-from test_solver_fast import CHOICE_CASES, GUARD_CASES, KERNEL_CASES, _RUN_KEYS, _kernel_case, _kernel_run
-dev = jax.devices("cuda")[0]
-res = {}
-for nz, ni, kind in KERNEL_CASES + CHOICE_CASES + GUARD_CASES:
-    key = f"{nz}_{ni}_{kind}"
-    try:
-        got = _kernel_run(dev, *_kernel_case(nz, ni, kind))
-        res.update((f"{key}/{k}", v) for k, v in zip(_RUN_KEYS, got))
-    except Exception as e:  # recorded: a forced gj above GJ_MAX_NI must be refused
-        res[f"{key}/error"] = np.array(str(e))
-np.savez(out, **res)
-"""
-
-
-@pytest.fixture(scope="module")
-def factor_variant_runs(tmp_path_factory):
-    """Per VULCAN3_BT_FACTOR setting ("" for unset), its child's runs of
-    KERNEL_CASES, CHOICE_CASES and GUARD_CASES on the CUDA device, keyed
-    "{nz}_{ni}_{kind}/{lu,perm,x,xs}", or ".../error" for a refused call."""
-    runs, tmp = {}, tmp_path_factory.mktemp("factor")
-
-    def run(factor):
-        if factor not in runs:
-            env = {k: v for k, v in os.environ.items()
-                   if k not in ("JAX_PLATFORMS", "VULCAN3_BT_FACTOR")}
-            if factor:
-                env["VULCAN3_BT_FACTOR"] = factor
-            path = tmp / f"factor_{factor or 'unset'}.npz"
-            res = subprocess.run([sys.executable, "-c", _FACTOR_CHILD, str(ROOT), str(path)],
-                                 capture_output=True, text=True, env=env, cwd=ROOT, timeout=900)
-            assert res.returncode == 0, res.stdout[-4000:] + res.stderr[-4000:]
-            runs[factor] = dict(np.load(path))
-        return runs[factor]
-
-    return run
 
 
 def _assert_close(got, ref, rtol, name, same_nonfinite=True):
@@ -302,25 +239,21 @@ def _assert_close(got, ref, rtol, name, same_nonfinite=True):
     return err / scale if scale else 0.0
 
 
-@pytest.mark.parametrize("factor", FACTOR_VARIANTS)
 @pytest.mark.parametrize("nz,ni,kind", KERNEL_CASES)
-def test_cuda_kernel_matches_cpu_kernel(nz, ni, kind, factor, factor_variant_runs):
+def test_cuda_kernel_matches_cpu_kernel(nz, ni, kind):
     """Raw factor and solve (one rhs and a stack on the same factors) of the
-    CUDA kernels, each factor kernel forced in its child, against the CPU
-    kernel (`_kernel_case`). On `tie` the smaller row must win on both; on
-    `singular` both kernels must put inf/nan in the same places, and the same
-    values there except past the Gauss-Jordan factor's first layer (its
-    inverse of the singular block is non-finite everywhere, as the CPU
-    kernel's, but not with the same inf/nan mix; a numpy emulation reads two
-    infs for nans in lu, all-nan solutions on both). Permutations are equal in
-    every layer and finite values within KERNEL_RTOL, except the Gauss-Jordan
-    factor's lu beyond the first layer and the solution on it: GJ_KERNEL_RTOL."""
-    _cuda_device()
+    CUDA kernel against the CPU kernel (`_kernel_case`). On `tie` the smaller
+    row must win on both; on `singular` both kernels must put inf/nan in the
+    same places, and the same values there in the first layer (beyond it the
+    Gauss-Jordan inverse of the singular block is non-finite everywhere, as
+    the CPU kernel's, but not with the same inf/nan mix; a numpy emulation
+    reads two infs for nans in lu, all-nan solutions on both). Permutations
+    are equal in every layer, the first layer's lu within KERNEL_RTOL, the
+    rest of lu and the solutions within GJ_KERNEL_RTOL."""
+    dev = _cuda_device()
     d, s, c, r = _kernel_case(nz, ni, kind)
     cpu = _kernel_run(jax.devices("cpu")[0], d, s, c, r)
-    run, key = factor_variant_runs(factor), f"{nz}_{ni}_{kind}"
-    assert f"{key}/error" not in run, str(run.get(f"{key}/error"))
-    gpu = [run[f"{key}/{k}"] for k in _RUN_KEYS]
+    gpu = _kernel_run(dev, d, s, c, r)
     np.testing.assert_array_equal(gpu[1], cpu[1])
     if kind == "tie":
         assert cpu[1][0, 0] == 2, cpu[1][0]
@@ -328,82 +261,47 @@ def test_cuda_kernel_matches_cpu_kernel(nz, ni, kind, factor, factor_variant_run
         assert not np.isfinite(cpu[2]).all()
     else:
         assert (cpu[1] != np.arange(ni)).any()
-    rtol = KERNEL_RTOL if factor == "lu" else GJ_KERNEL_RTOL
     errs = {"lu[0]": _assert_close(gpu[0][0], cpu[0][0], KERNEL_RTOL, "lu[0]")}
     for name, i in (("lu", 0), ("x", 2), ("stacked x", 3)):
-        errs[name] = _assert_close(gpu[i], cpu[i], rtol, name, same_nonfinite=factor == "lu")
-    print(f"\n{factor} {key} vs CPU kernel: " + ", ".join(f"{k} {v:.1e}" for k, v in errs.items()))
+        errs[name] = _assert_close(gpu[i], cpu[i], GJ_KERNEL_RTOL, name, same_nonfinite=False)
+    print(f"\n{nz}_{ni}_{kind} vs CPU kernel: " + ", ".join(f"{k} {v:.1e}" for k, v in errs.items()))
 
 
-@pytest.mark.parametrize("nz,ni,kind", [c for c in KERNEL_CASES + GUARD_CASES if c[2] != "singular"])
-def test_gauss_jordan_pivot_step_is_the_lu_kernels(nz, ni, kind, factor_variant_runs):
-    """The Gauss-Jordan factor's pivot step (a REDUX argmax on sm_80+, the
-    multipliers as corrected products with the IEEE 1 / piv, IEEE divisions
-    outside that range) against the LU kernel's shared-memory sweep with its
-    divisions: the first layer is the same partial-pivot sweep in both, so lu
-    and perm must agree byte for byte. `huge` and `tiny` put the first layer's
-    pivot or multiplier numerators outside the corrected range, so the warp
-    takes the division fallback there (asserted on the inputs); the others run
-    the corrected products throughout."""
-    _cuda_device()
-    gj, lu = factor_variant_runs("gj"), factor_variant_runs("lu")
-    key = f"{nz}_{ni}_{kind}"
-    for run in (gj, lu):
-        assert f"{key}/error" not in run, str(run.get(f"{key}/error"))
-    d0 = _kernel_case(nz, ni, kind)[0][0]
-    if kind == "huge":
-        assert np.abs(d0).max() > GJ_RCP_PIV_MAX
-    elif kind == "tiny":
-        assert 0.0 < np.abs(d0[3]).max() < GJ_RCP_QUOT_MIN
-    assert gj[f"{key}/perm"][0].tobytes() == lu[f"{key}/perm"][0].tobytes()
-    assert gj[f"{key}/lu"][0].tobytes() == lu[f"{key}/lu"][0].tobytes()
-    assert np.isfinite(gj[f"{key}/x"]).all()
+@pytest.mark.parametrize("ni,cuda,refused", [(GJ_MAX_NI + 1, True, True), (GJ_MAX_NI, True, False),
+                                             (GJ_MAX_NI + 1, False, False)])
+def test_cuda_ffi_refuses_more_than_96_species(ni, cuda, refused, monkeypatch):
+    """`ffi` on a CUDA backend refuses ni > GJ_MAX_NI while the step is traced,
+    before the kernel library is loaded; ni 96 on CUDA, and any ni on the CPU
+    kernel, go on to load it. No GPU needed: the platform query and the loader
+    are patched."""
+    class Loaded(Exception):
+        pass
 
+    def load():
+        raise Loaded
 
-def test_factor_kernel_choice(factor_variant_runs):
-    """With VULCAN3_BT_FACTOR unset a call runs the Gauss-Jordan factor up
-    to GJ_MAX_NI and the LU one above: on every block the unset child's output
-    is byte for byte the gj child's up to ni 96 and the lu child's at 97, where
-    the forced gj is refused. The two forced kernels differ beyond the first
-    layer (roundoff), so the switch takes effect, and the Gauss-Jordan factor
-    of the full 96 x 96 tile solves its block (cond ~2e5) with the CPU
-    kernel's residual or better: no worse than max(2x it, 10x LAPACK gbsv's)."""
-    _cuda_device()
-    unset, gj, lu = (factor_variant_runs(f) for f in ("", "gj", "lu"))
-    for nz, ni, kind in KERNEL_CASES + CHOICE_CASES:
-        key = f"{nz}_{ni}_{kind}"
-        want = gj if ni <= GJ_MAX_NI else lu
-        for run in (unset, want):
-            assert f"{key}/error" not in run, str(run.get(f"{key}/error"))
-        for k in _RUN_KEYS:
-            assert unset[f"{key}/{k}"].tobytes() == want[f"{key}/{k}"].tobytes(), (key, k)
-    over = f"2_{GJ_MAX_NI + 1}_random"
-    assert "VULCAN3_BT_FACTOR=gj" in str(gj.get(f"{over}/error")), gj.get(f"{over}/error")
-    assert any(gj[f"{nz}_{ni}_{kind}/lu"].tobytes() != lu[f"{nz}_{ni}_{kind}/lu"].tobytes()
-               for nz, ni, kind in KERNEL_CASES if nz > 1)
-    d, s, c, r = _kernel_case(2, GJ_MAX_NI, "random")
-    x_cpu = _kernel_run(jax.devices("cpu")[0], d, s, c, r)[2]
-    d, s, c, r = (jnp.asarray(a) for a in (d, s, c, r))
-    res_gj = _resid(d, s, c, jnp.asarray(gj[f"2_{GJ_MAX_NI}_random/x"]), r)
-    res_cpu = _resid(d, s, c, jnp.asarray(x_cpu), r)
-    res_dense = _resid(d, s, c, banded_solve(d, s, c, r), r)
-    print(f"\nni {GJ_MAX_NI} residual: gj {res_gj:.2e}, CPU kernel {res_cpu:.2e}, gbsv {res_dense:.2e}")
-    assert res_gj <= max(2.0 * res_cpu, 10.0 * res_dense), (res_gj, res_cpu, res_dense)
+    monkeypatch.setattr(fast_mod, "BACKEND", "ffi")
+    monkeypatch.setattr(fast_mod, "_on_cuda", lambda: cuda)
+    monkeypatch.setattr(fast_mod, "_register", load)
+    assert fast_mod.CUDA_MAX_NI == GJ_MAX_NI
+    diag, sup, sub, _ = _system(2, ni, 0, boost=10.0, scale=1.0)
+    with pytest.raises(ValueError if refused else Loaded) as e:
+        jax.jit(lambda *a: fast_mod.factor(*a))(diag, sup, sub)  # a fresh trace
+    if refused:
+        assert str(e.value) == ("the CUDA ffi solver handles at most 96 species per layer "
+                                f"(this network has ni={ni}); run with VULCAN3_SOLVER=fast")
 
 
 _SANITIZER_CHILD = r"""
-import os, sys
+import os
 import jax, jax.numpy as jnp, numpy as np
 jax.config.update("jax_enable_x64", True)
 import vulcan3.solver_fast as fast_mod
 dev = jax.devices("cuda")[0]
-# ni 89 and 97 (SNCHO, DMS) in the one-buffer run only: two buffers exceed a sm_89 card;
-# the forced Gauss-Jordan factor takes ni up to argv[1] (GJ_MAX_NI)
+# ni 89 (SNCHO) and 96 (the widest the kernel takes) in the one-buffer run only:
+# two buffers exceed a sm_89 card
 one_buf = os.environ["VULCAN3_BT_BUFFERS"] == "1"
-gj = os.environ["VULCAN3_BT_FACTOR"] == "gj"
-for nz, ni in [(1, 5), (3, 16), (4, 33), (6, 64)] + [(3, 89), (2, 97)] * one_buf:
-    if gj and ni > int(sys.argv[1]):
-        continue
+for nz, ni in [(1, 5), (3, 16), (4, 33), (6, 64)] + [(3, 89), (2, 96)] * one_buf:
     rng = np.random.default_rng(ni)
     d, s, c, r = (jax.device_put(jnp.asarray(a), dev) for a in (
         rng.standard_normal((nz, ni, ni)), rng.standard_normal((nz - 1, ni)),
@@ -415,16 +313,15 @@ for nz, ni in [(1, 5), (3, 16), (4, 33), (6, 64)] + [(3, 89), (2, 97)] * one_buf
 """
 
 
-@pytest.mark.parametrize("factor", FACTOR_VARIANTS)
 @pytest.mark.parametrize("buffers", ["1", "2"])
 @pytest.mark.parametrize("tool", ["memcheck", "racecheck", "synccheck", "initcheck"])
-def test_cuda_kernel_under_compute_sanitizer(tool, buffers, factor):
+def test_cuda_kernel_under_compute_sanitizer(tool, buffers):
     """Opt-in: set VULCAN3_COMPUTE_SANITIZER to the compute-sanitizer
     binary. The CUDA factor and a stacked solve on small pivoting shapes run
-    under each tool, with each factor kernel and the one- and two-buffer
-    variants, and any report fails. XLA's platform allocator gives each buffer
-    its own allocation, so memcheck sees an overrun past it; command buffers
-    are off, so the launches are plain."""
+    under each tool, with the one- and two-buffer solve variants, and any
+    report fails. XLA's platform allocator gives each buffer its own
+    allocation, so memcheck sees an overrun past it; command buffers are off,
+    so the launches are plain."""
     exe = os.environ.get("VULCAN3_COMPUTE_SANITIZER")
     if not exe:
         pytest.skip("set VULCAN3_COMPUTE_SANITIZER to the compute-sanitizer binary to run")
@@ -432,21 +329,19 @@ def test_cuda_kernel_under_compute_sanitizer(tool, buffers, factor):
         pytest.skip(f"{fast_mod._CUDA_LIB.name} not built (python -m vulcan3.solver_fast --cuda)")
     env = {k: v for k, v in os.environ.items() if k != "JAX_PLATFORMS"}
     env.update(XLA_PYTHON_CLIENT_ALLOCATOR="platform", XLA_PYTHON_CLIENT_PREALLOCATE="false",
-               XLA_FLAGS="--xla_gpu_enable_command_buffer=", VULCAN3_BT_BUFFERS=buffers,
-               VULCAN3_BT_FACTOR=factor)
+               XLA_FLAGS="--xla_gpu_enable_command_buffer=", VULCAN3_BT_BUFFERS=buffers)
     res = subprocess.run([exe, "--tool", tool, "--error-exitcode", "1", sys.executable, "-c",
-                          _SANITIZER_CHILD, str(GJ_MAX_NI)], capture_output=True, text=True,
-                         env=env, timeout=600)
+                          _SANITIZER_CHILD], capture_output=True, text=True, env=env, timeout=600)
     assert res.returncode == 0, res.stdout[-4000:] + res.stderr[-4000:]
 
 
-# The one- and two-buffer CUDA kernels run the same operations in the same
-# order, so their outputs must be equal byte for byte, nan payloads included;
-# the Gauss-Jordan factor has one variant, so with it that is the solve's.
-# VULCAN3_BT_FACTOR and VULCAN3_BT_BUFFERS are read once per process, so
-# each (factor, buffers) runs in its own child; the child captures the stage-1
-# systems on the CPU and returns them too, so the comparisons also prove every
-# child solved the same bytes. The same runs compare the two factor kernels.
+# The one- and two-buffer CUDA solve kernels run the same operations in the
+# same order, so their outputs must be equal byte for byte, nan payloads
+# included (the factor has one variant). VULCAN3_BT_BUFFERS is read once per
+# process, so each setting runs in its own child; the child captures the
+# stage-1 systems on the CPU and returns them too, so the comparisons also
+# prove both children solved the same bytes. The same runs check the factor
+# on the real blocks.
 BUFFER_DTS = (3.8e4, 1e6, 1e11)
 _BUFFER_NETS = {  # fixture, config, the child's network environment
     "HD189": ("adj_state_hd189.npz", {"VULCAN3_NETWORK": "thermo/NCHO_photo_network.txt"}),
@@ -480,8 +375,8 @@ np.savez(out, **res)
 
 @pytest.fixture(scope="module")
 def buffer_variants(tmp_path_factory):
-    """Per network, each child's output, runs[factor][buffers], or the reason
-    the two-buffer kernels cannot run on this device."""
+    """Per network, each child's output, runs[buffers], or the reason the
+    two-buffer kernels cannot run on this device."""
     runs = {}
 
     def run(net):
@@ -489,19 +384,18 @@ def buffer_variants(tmp_path_factory):
             return runs[net]
         fixture, net_env = _BUFFER_NETS[net]
         out, tmp = {}, tmp_path_factory.mktemp(net)
-        for factor in FACTOR_VARIANTS:
-            for buffers in ("2", "1"):
-                env = {k: v for k, v in os.environ.items() if k != "JAX_PLATFORMS"}
-                env.update(net_env, VULCAN3_BT_FACTOR=factor, VULCAN3_BT_BUFFERS=buffers)
-                path = tmp / f"{factor}_buffers{buffers}.npz"
-                res = subprocess.run([sys.executable, "-c", _BUFFERS_CHILD, str(ROOT), fixture, net,
-                                      str(path)], capture_output=True, text=True, env=env, cwd=ROOT,
-                                     timeout=900)
-                if buffers == "2" and res.returncode and "shared memory per block" in res.stderr:
-                    runs[net] = next(ln for ln in res.stderr.splitlines() if "shared memory per block" in ln)
-                    return runs[net]
-                assert res.returncode == 0, res.stdout[-4000:] + res.stderr[-4000:]
-                out.setdefault(factor, {})[buffers] = dict(np.load(path))
+        for buffers in ("2", "1"):
+            env = {k: v for k, v in os.environ.items() if k != "JAX_PLATFORMS"}
+            env.update(net_env, VULCAN3_BT_BUFFERS=buffers)
+            path = tmp / f"buffers{buffers}.npz"
+            res = subprocess.run([sys.executable, "-c", _BUFFERS_CHILD, str(ROOT), fixture, net,
+                                  str(path)], capture_output=True, text=True, env=env, cwd=ROOT,
+                                 timeout=900)
+            if buffers == "2" and res.returncode and "shared memory per block" in res.stderr:
+                runs[net] = next(ln for ln in res.stderr.splitlines() if "shared memory per block" in ln)
+                return runs[net]
+            assert res.returncode == 0, res.stdout[-4000:] + res.stderr[-4000:]
+            out[buffers] = dict(np.load(path))
         runs[net] = out
         return out
 
@@ -521,16 +415,15 @@ def _buffer_runs(net, buffer_variants):
     return runs
 
 
-@pytest.mark.parametrize("factor", FACTOR_VARIANTS)
 @pytest.mark.parametrize("net,case", [(net, f"dt{dt:g}") for net in _BUFFER_NETS for dt in BUFFER_DTS]
                          + [("HD189", "tie"), ("HD189", "singular")])
-def test_one_buffer_kernels_are_bitwise_the_two_buffer_ones(net, case, factor, buffer_variants):
+def test_one_buffer_kernels_are_bitwise_the_two_buffer_ones(net, case, buffer_variants):
     """Factor (lu, perm) and a three-rhs solve on shared factors (x) of the
-    one-buffer kernels against the two-buffer ones, with each factor kernel:
-    the real stage-1 blocks of both networks at the run's dt, 1e6 and dt_max,
-    and `_kernel_case`'s tie and singular blocks."""
+    one-buffer kernels against the two-buffer ones: the real stage-1 blocks of
+    both networks at the run's dt, 1e6 and dt_max, and `_kernel_case`'s tie
+    and singular blocks."""
     runs = _buffer_runs(net, buffer_variants)
-    two, one = runs[factor]["2"], runs[factor]["1"]
+    two, one = runs["2"], runs["1"]
     for k in ("diag", "sup", "sub", "rhs", "lu", "perm", "x"):
         assert two[f"{case}/{k}"].tobytes() == one[f"{case}/{k}"].tobytes(), k
     assert np.isfinite(one[f"{case}/x"]).all() != (case == "singular")
@@ -538,29 +431,26 @@ def test_one_buffer_kernels_are_bitwise_the_two_buffer_ones(net, case, factor, b
 
 @pytest.mark.parametrize("net,case", [(net, f"dt{dt:g}") for net in _BUFFER_NETS for dt in BUFFER_DTS])
 def test_gauss_jordan_factor_on_real_blocks(net, case, buffer_variants):
-    """The Gauss-Jordan factor against the LU one on the real stage-1 blocks
-    (the two-buffer children; the one-buffer ones are bitwise these). The
-    first layer is the same partial-pivot sweep in both: lu and perm byte for
-    byte. Beyond it the Schur complements carry the Gauss-Jordan inverse, so
-    the solution is judged by its residual with check_real_blocks' bar: no
-    worse than max(2x the LU kernel's, 10x LAPACK gbsv's). The permutations
-    past the first layer are compared in the printout only (equal in 1488 of
-    1488 layers of 24 W39b columns in the kernel benchmark)."""
-    runs = _buffer_runs(net, buffer_variants)
-    gj, lu = runs["gj"]["2"], runs["lu"]["2"]
-    for k in ("diag", "sup", "sub", "rhs"):
-        assert gj[f"{case}/{k}"].tobytes() == lu[f"{case}/{k}"].tobytes(), k
-    assert gj[f"{case}/lu"][0].tobytes() == lu[f"{case}/lu"][0].tobytes()
-    assert gj[f"{case}/perm"][0].tobytes() == lu[f"{case}/perm"][0].tobytes()
-    diag, sup, sub, rhs = (jnp.asarray(gj[f"{case}/{k}"]) for k in ("diag", "sup", "sub", "rhs"))
-    x_gj, x_lu = (jnp.asarray(run[f"{case}/x"][0]) for run in (gj, lu))  # the rhs r of (r, 2r, -r)
-    assert bool(jnp.isfinite(x_gj).all())
-    res_gj, res_lu = _resid(diag, sup, sub, x_gj, rhs), _resid(diag, sup, sub, x_lu, rhs)
+    """The CUDA kernel against the CPU kernel on the real stage-1 blocks (the
+    two-buffer child; the one-buffer one is bitwise it). Beyond the first
+    layer the Schur complements carry the Gauss-Jordan inverse, so the
+    solution is judged by its residual with check_real_blocks' bar: no worse
+    than max(2x the CPU kernel's, 10x LAPACK gbsv's). The first layer's lu and
+    the permutations are compared in the printout only."""
+    gpu = _buffer_runs(net, buffer_variants)["2"]
+    diag, sup, sub, rhs = (gpu[f"{case}/{k}"] for k in ("diag", "sup", "sub", "rhs"))
+    lu_cpu, perm_cpu, x_cpu, _ = _kernel_run(jax.devices("cpu")[0], diag, sup, sub, rhs)
+    x_gpu = jnp.asarray(gpu[f"{case}/x"][0])  # the rhs r of (r, 2r, -r)
+    assert bool(jnp.isfinite(x_gpu).all())
+    diag, sup, sub, rhs = (jnp.asarray(a) for a in (diag, sup, sub, rhs))
+    res_gpu, res_cpu = _resid(diag, sup, sub, x_gpu, rhs), _resid(diag, sup, sub, jnp.asarray(x_cpu), rhs)
     res_dense = _resid(diag, sup, sub, banded_solve(diag, sup, sub, rhs), rhs)
-    same = np.mean([np.array_equal(a, b) for a, b in zip(gj[f"{case}/perm"], lu[f"{case}/perm"])])
-    print(f"\n{net} {case}: residual gj {res_gj:.2e}, lu {res_lu:.2e}, gbsv {res_dense:.2e}; "
-          f"x rel diff {_rel(x_lu, x_gj):.1e}; perm equal in {same:.1%} of layers")
-    assert res_gj <= max(2.0 * res_lu, 10.0 * res_dense) + 1e-12, (res_gj, res_lu, res_dense)
+    same = np.mean([np.array_equal(a, b) for a, b in zip(gpu[f"{case}/perm"], perm_cpu)])
+    print(f"\n{net} {case}: residual gpu {res_gpu:.2e}, CPU kernel {res_cpu:.2e}, gbsv {res_dense:.2e}; "
+          f"x rel diff {_rel(jnp.asarray(x_cpu), x_gpu):.1e}; lu[0] rel diff "
+          f"{_rel(jnp.asarray(lu_cpu[0]), jnp.asarray(gpu[f'{case}/lu'][0])):.1e}; "
+          f"perm equal in {same:.1%} of layers")
+    assert res_gpu <= max(2.0 * res_cpu, 10.0 * res_dense) + 1e-12, (res_gpu, res_cpu, res_dense)
 
 
 def capture_stage1(fixture: str, cfg_name: str, dt: float):

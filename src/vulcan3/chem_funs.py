@@ -17,8 +17,7 @@ _NETWORK = _network.parse_network(str(resolve_data_path(_CFG.network)))
 _NET_JAX = _chem.to_jax(_NETWORK)
 
 # The production RHS (the integrator binds it), built or reloaded from cache.
-# Memoised in `_make_chem_funs._BUILD_CACHE`, so the warmup call in
-# `RunState.with_pre_loop_setup` returns the same `Callable`.
+# Memoised in `_make_chem_funs._BUILD_CACHE`.
 chem_rhs_codegen = _make_chem_funs.build_chem_rhs(_NETWORK)
 
 ni: int = _NETWORK.ni

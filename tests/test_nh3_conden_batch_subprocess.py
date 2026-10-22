@@ -88,12 +88,12 @@ PARA_A = [120.0, 130.0, 0.05, 0.02, 1.0, 1.0]
 PARA_B = [100.0, 170.0, 0.2, 0.01, 1.0, 1.0]
 
 cfg.para_anaTP = PARA_A
-rsA = RunState.with_pre_loop_setup(cfg, skip_chem_warmup=True)
+rsA = RunState.with_pre_loop_setup(cfg)
 integA = outer_loop.OuterLoop(op_jax.Ros2JAX(), op.Output(cfg=cfg), cfg=cfg)
 sA, atmA = integA.prepare_runstate(rsA)
 
 cfg.para_anaTP = PARA_B
-rsB = RunState.with_pre_loop_setup(cfg, skip_chem_warmup=True)
+rsB = RunState.with_pre_loop_setup(cfg)
 integB = outer_loop.OuterLoop(op_jax.Ros2JAX(), op.Output(cfg=cfg), cfg=cfg)
 sB, atmB = integB.prepare_runstate(rsB)
 

@@ -49,7 +49,7 @@ kept them.
 |---|---|---|---|
 | `fast` solver: `solver.py` scans in `lax.custom_linear_solve`; tangent `A dx = db - dA x` on the primal factors | on | primal bitwise vs `reference`; tangent 1.4e-9..1.3e-6 vs AD through LU | one step's jvp 1.8x (CPU) |
 | `ffi` solver: C++ / CUDA block-Thomas through XLA FFI | opt-in; production GH200 | roundoff, residual-matched; gates kept; reverse mode unsupported | GPU rows below |
-| Gauss-Jordan factor + reciprocal-pivot solve, `d992314` (`VULCAN3_BT_FACTOR`; LU above ni 96) | on under `ffi` | layer 0 bitwise, same permutation; dlogL median 9e-8 | 1.24x per step, 75.2 -> 60.7 ms/iter at 396 lanes |
+| Gauss-Jordan factor + reciprocal-pivot solve, `d992314` (the LU fallback is removed: CUDA `ffi` takes ni <= 96, else `fast`) | on under `ffi` | layer 0 bitwise, same permutation; dlogL median 9e-8 | 1.24x per step, 75.2 -> 60.7 ms/iter at 396 lanes |
 | REDUX pivot search, `bt_div_by_rcp`, cp.async solve loader, `a5b1215` | on under `ffi` (sm_80+) | bitwise | factor 29.1 -> 23.1 ms, solve 5.3 -> 4.6 ms at 792 lanes; pass 1 343.8 -> 300.6 s |
 | One shared buffer per kernel, `a6e8498` (`VULCAN3_BT_BUFFERS`) | chosen per call | bitwise | shared memory at ni 89 127.7 -> 64.4 kB, so 3 blocks/SM on GH200; daw factor 1.22x, solve 1.83x lanes/ms |
 | Solve substitution vector in registers, `0261b4a` | on under `ffi` | bitwise | daw primal lane-step 1.11-1.48x, tangent solve 2.59-2.64x |
@@ -572,16 +572,16 @@ Earth and K2-18b; an external user reports both converge upstream (todo).
   RunState does not carry the certificate ring, the element budget or the hybrid
   phase.
 - `network` / `com_file` / `atom_list` are read at the first `import vulcan3`
-  (`config._FROZEN_ENV`); the CLI re-execs once with matching `$VULCAN3_*` when a
-  YAML's frozen knobs differ (guard `$VULCAN3_CLI_RELAUNCHED`). A pre-import
-  launcher cannot live in the package (any submodule import runs `__init__` ->
-  `state` -> `chem_funs`). `VULCAN3_SOLVER`, `VULCAN3_CHEM_RHS`,
-  `VULCAN3_BT_FACTOR` and `VULCAN3_BT_BUFFERS` are read once per process too. Any
-  `VULCAN_JAX_*` variable makes the import raise.
-- A config file overlays `default.yaml`; `runtime_validation` requires
-  `geom_conv_tol` and `element_budget_tol`; `<X>_H` is accepted for any symbol of
-  the composition table. Validation resolves assets with `resolve_data_path`
-  (cwd first, then package data), as the run does.
+  (`config._FROZEN_ENV`); on a cfg that differs (`state._frozen_mismatch`; a
+  byte-identical file copy matches) the CLI re-execs once with matching
+  `$VULCAN3_*` (guard `$VULCAN3_CLI_RELAUNCHED`), `with_pre_loop_setup` raises.
+  A pre-import launcher cannot live in the package (any submodule import runs
+  `__init__` -> `state` -> `chem_funs`). `VULCAN3_SOLVER`, `VULCAN3_CHEM_RHS` and
+  `VULCAN3_BT_BUFFERS` are read once per process; `VULCAN_JAX_*` fails the import.
+- A config file overlays `default.yaml`; a named config sets only the knobs that
+  differ (`HD189.yaml` is `{}`). `<X>_H` is accepted for any symbol of the
+  composition table. Validation resolves assets with `resolve_data_path` (cwd
+  first, then package data), as the run does.
 - `termination_reason`: 0 running, 1 converged, 2 runtime, 3 step count, 5
   non-finite; `end_case` follows master's 1/2/3, and 0/5 or a non-finite
   "converged" state read 5.
@@ -830,7 +830,7 @@ B. Found in upstream, kept at parity
 | P13 | `CH3SH_branch.csv` grid non-monotonic at the tail | `thermo/photo_cross/CH3SH/CH3SH_branch.csv:142-143` | same | unmeasured | no |
 | P14 | TiSNCHO ships three reactions twice | `thermo/TiSNCHO_photo_network.txt:537-542` | `parse_network(duplicates_ok=True)` | 0 (unselected) | yes |
 | P15 | SNCHO_C3 ships `C2H2 + C -> C3 + H2` twice, different rates | `thermo/SNCHO_photo_network_C3.txt:474,479` | same | 0 (unselectable) | file renamed away |
-| P16 | rate fits evaluated outside their stated T range | `op.py:166,170` | `runtime_validation.report_rate_temp_ranges` (advisory) | see "Parity numbers" | no |
+| P16 | rate fits evaluated outside their stated T range | `op.py:166,170` | same (`rates_jax`; no advisory) | see "Parity numbers" | no |
 | P17 | `diffdf` and `lhs_jac_tot` build `ysum` from different predicates | `op.py:1505` vs `:1981` | matches the derivative of `diffdf`; `tests/test_diffusion.py` tolerance | LHS only, a few S8 diagonal cells | no |
 | P19 | arithmetic layer-mean actinic flux | `op.py:2709` | `photo.compute_flux_jax` `ave_dir_flux` | see "Photolysis decisions" | no |
 

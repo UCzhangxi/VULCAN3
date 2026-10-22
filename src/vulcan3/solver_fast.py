@@ -18,14 +18,13 @@ Same call shape as `solver.py`: `factor(diag, sup_d, sub_d)` once, then
 
 On a CUDA device the `ffi` backend runs `csrc/block_thomas_cuda.cu`: one
 factor launch and two solve launches per Ros2 step, with the CPU kernel's
-factor format and its results to roundoff (not bitwise). Its header gives the
-launch layouts and the two per-call choices: the factor kernel (Gauss-Jordan
-up to ni = 96, LU above) and the LU factor's and the solve's one- or
-two-buffer variant. `VULCAN3_BT_FACTOR=gj|lu` and `VULCAN3_BT_BUFFERS=1|2`
-force them; both are read once per process. It is built only by
-`python -m vulcan3.solver_fast --cuda` on a host with nvcc; without the
-library nothing changes here and a device call under `ffi` fails loudly at
-dispatch.
+factor format and its results to roundoff (not bitwise). It takes at most
+`CUDA_MAX_NI` = 96 species per layer: a wider network is refused while the step
+is traced. Its header gives the launch layouts and the solve's per-call one- or
+two-buffer choice, which `VULCAN3_BT_BUFFERS=1|2` forces (read once per
+process). It is built only by `python -m vulcan3.solver_fast --cuda` on a host
+with nvcc, for sm_80+; without the library nothing changes here and a device
+call under `ffi` fails loudly at dispatch.
 
 `jax_step` imports this module by default; `VULCAN3_SOLVER=reference`
 restores the plain `solver.py` pair for A/B, and `ffi` selects the C++ kernel.
@@ -136,6 +135,9 @@ _LIB = _CSRC / (
 )
 _CUDA_LIB = _CSRC / "libblock_thomas_cuda.so"
 _HASH_TAG = b"vulcan-bt-source-sha256:"  # VulcanBtSourceHash, block_thomas_common.h
+# The CUDA factor's register tile (block_thomas_cuda.cu kGjMaxNi); its shared
+# memory at that size (77.6 kB) fits every sm_80+ GPU.
+CUDA_MAX_NI = 96
 
 
 def _source_hash(src: Path) -> str:
@@ -249,7 +251,18 @@ def _register():
     _REGISTERED = True
 
 
+def _on_cuda() -> bool:
+    """True if the step runs on a CUDA GPU (JAX's default backend)."""
+    return jax.default_backend() in ("gpu", "cuda")
+
+
 def _ffi_factor(diag, sup_d, sub_d):
+    ni = diag.shape[-1]
+    if ni > CUDA_MAX_NI and _on_cuda():
+        raise ValueError(
+            f"the CUDA ffi solver handles at most {CUDA_MAX_NI} species per layer "
+            f"(this network has ni={ni}); run with VULCAN3_SOLVER=fast"
+        )
     _register()
     out = (
         jax.ShapeDtypeStruct(diag.shape, diag.dtype),

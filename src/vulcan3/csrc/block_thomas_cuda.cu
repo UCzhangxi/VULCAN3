@@ -3,36 +3,32 @@
 // convention (perm[i] = source row of permuted row i). One thread block per
 // batch element, the whole nz sweep inside the kernel. A zero pivot gives
 // inf/nan like lax.linalg.lu, not an error. Build: python -m vulcan3.solver_fast --cuda.
+// It takes sm_80+ and ni <= 96; solver_fast refuses a wider network before any
+// launch (VULCAN3_SOLVER=fast takes any ni), and both handlers refuse it too.
 //
-// The factor has two kernels with the same output (lu in partial-pivot row
-// order and perm). bt_gj_factor_kernel, the default wherever it fits (ni <=
-// kGjMaxNi = 96 and a block resident on the device, bt_choose_factor), holds
-// each block in registers and runs one exchange-form Gauss-Jordan sweep per
-// layer: on the rows not yet pivoted its operations are the partial-pivot LU's,
-// so layer 0 is bitwise the LU kernel's, and the same sweep leaves
-// inv(A'_j) for the next layer's Schur update. bt_factor_kernel builds that
-// inverse by ni column substitutions on the LU in shared memory instead, so
-// beyond layer 0 the two differ by roundoff. On a GH200 with WASP-39b blocks
-// (ni 89, 396 columns) the Gauss-Jordan factor takes 19.6 ms against 31.4,
-// with the same perm in every layer and the same accuracy against a binary128
-// solve. bt_factor_kernel takes ni > 96 (the DMS network, ni 97) and any
-// device the Gauss-Jordan kernel does not fit. VULCAN3_BT_FACTOR=gj or lu
-// forces one. The Gauss-Jordan pivot step is on the kernel's critical path, so
-// it reduces the warp's candidates with three REDUX operations on sm_80+
-// (bt_warp_argmax) and takes the multipliers v / piv as products with the IEEE
-// 1 / piv and two FMA corrections (bt_div_by_rcp), dividing only outside that
-// sequence's range: the same winner and the same IEEE quotients, so the
-// factors are bitwise those of the shuffle rounds and divisions.
+// The factor, bt_gj_factor_kernel, holds each block in registers (ni <=
+// kGjMaxNi = 96) and runs one exchange-form Gauss-Jordan sweep per layer: on
+// the rows not yet pivoted its operations are the partial-pivot LU's, so it
+// gives the CPU kernel's lu (partial-pivot row order) and perm, and the same
+// sweep leaves inv(A'_j) for the next layer's Schur update, where the CPU
+// kernel substitutes on the LU; beyond layer 0 the two differ by roundoff. The
+// pivot step is on the kernel's critical path, so it reduces the warp's
+// candidates with three REDUX operations (bt_warp_argmax) and takes the
+// multipliers v / piv as products with the IEEE 1 / piv and two FMA
+// corrections (bt_div_by_rcp), dividing only outside that sequence's range:
+// the same winner and the same IEEE quotients as shuffle rounds and divisions.
 //
-// The LU factor and the solve launch 2 ni threads rounded up to a warp. Each
-// has two variants with bitwise equal results: two ni x ni double blocks of
-// shared memory plus O(ni) (about 125 KB at ni = 89), or one (about 63 KB),
-// which fits more blocks on an SM. A call takes two buffers when they fit the
-// device and need no more waves than one (bt_choose); VULCAN3_BT_BUFFERS=1
-// or 2 forces a variant. Shared memory is opted in to the device maximum. The
-// solve keeps each lane's substitution rows in registers, so it takes ni <= 128
-// and refuses more; it stages each layer's LU in shared memory with cp.async
-// on sm_80+ (bt_load_block), every thread's copies in flight at once.
+// The solve launches 2 ni threads rounded up to a warp. It has two variants
+// with bitwise equal results: two ni x ni double blocks of shared memory plus
+// O(ni) (about 125 KB at ni = 89), or one (about 63 KB), which fits more blocks
+// on an SM. A call takes two buffers when they fit the device and need no more
+// waves than one (bt_choose); VULCAN3_BT_BUFFERS=1 or 2 forces a variant.
+// Shared memory is opted in to the device maximum. The solve keeps each lane's
+// substitution rows in registers and stages each layer's LU in shared memory
+// with cp.async (bt_load_block), every thread's copies in flight at once.
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 800
+#error "block_thomas_cuda.cu needs sm_80 or newer (REDUX, cp.async); set NVCC_ARCH"
+#endif
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
@@ -57,20 +53,17 @@ using namespace vulcan_bt;
 constexpr int kWarpSize = 32;
 constexpr int kLaneMask = kWarpSize - 1;
 constexpr unsigned kFullMask = 0xffffffffu;  // every lane of a warp
-constexpr int kMaxThreads = 1024;            // CUDA limit per thread block
-constexpr int kMaxWarps = kMaxThreads / kWarpSize;
 constexpr int64_t kMaxGridX = std::numeric_limits<int32_t>::max();  // CUDA gridDim.x limit
 // Rows per lane the solve's substitution holds in registers: ni <= kMaxNb
-// kWarpSize (ni 97, the DMS network, takes 4). The solve kernel is compiled
-// for every NB up to kMaxNb and launched with NB = ceil(ni / kWarpSize).
-constexpr int kMaxNb = 4;
+// kWarpSize = 96, the factor's kGjMaxNi. The solve kernel is compiled for
+// every NB up to kMaxNb and launched with NB = ceil(ni / kWarpSize).
+constexpr int kMaxNb = 3;
 // Minimum resident blocks per SM in the NB solve kernel's __launch_bounds__
 // (its maximum is 2 NB warps, the most threads bt_threads gives that NB). They
 // hold NB 1-3 at 68-80 registers on sm_89 and sm_90 without spills, so the NB 3
 // class (ni 65-96) keeps the 3 blocks per SM shared memory allows at ni 89 on
-// sm_90. NB 4 takes 116-125, which still allows the 2 blocks shared memory
-// allows at ni 97.
-constexpr int kSolveMinBlocks[kMaxNb + 1] = {0, 12, 6, 4, 2};
+// sm_90.
+constexpr int kSolveMinBlocks[kMaxNb + 1] = {0, 12, 6, 4};
 
 // The Gauss-Jordan factor holds a kGjMaxNi x kGjMaxNi tile (the block, zero
 // padded) in registers: thread (warp w, lane l) owns rows l + kWarpSize a
@@ -83,6 +76,7 @@ constexpr int kGjRowSlots = 3;
 constexpr int kGjColSlots = 12;
 constexpr int kGjMaxNi = kWarpSize * kGjRowSlots;  // 96
 static_assert(kGjWarps * kGjColSlots == kGjMaxNi, "the warps' columns must cover the tile");
+static_assert(kMaxNb * kWarpSize == kGjMaxNi, "the solve takes the blocks the factor takes");
 static_assert((kGjWarps & (kGjWarps - 1)) == 0, "column ownership is a power-of-two modulus");
 static_assert(kGjColSlots % 2 == 0, "the pivot-row copy is read as double2");
 // __launch_bounds__ minimum blocks per SM: two 256-thread blocks cap the
@@ -116,24 +110,6 @@ static_assert(kGjOffRowbuf % 2 == 0, "rowbuf is read as double2");
 // The solve (bt_lu_solve_warp0) multiplies by 1 / piv only in the piv range.
 constexpr double kGjRcpPivMin = 0x1p-1000, kGjRcpPivMax = 0x1p1000;
 constexpr double kGjRcpQuotMin = 0x1p-960, kGjRcpQuotMax = 0x1p960;
-
-// Sum over q0 <= q < q1 of arow[q] * mcol[q * ms], in four independent
-// accumulators so the dependent shared-memory loads overlap. It differs from
-// the CPU reference's left-to-right sum by reassociation and by FMA
-// contraction (nvcc's default -fmad=true).
-__device__ inline double bt_dot4(const double* arow, const double* mcol, int ms,
-                                 int q0, int q1) {
-  double a0 = 0.0, a1 = 0.0, a2 = 0.0, a3 = 0.0;
-  int q = q0;
-  for (; q + 3 < q1; q += 4) {
-    a0 += arow[q] * mcol[q * ms];
-    a1 += arow[q + 1] * mcol[(q + 1) * ms];
-    a2 += arow[q + 2] * mcol[(q + 2) * ms];
-    a3 += arow[q + 3] * mcol[(q + 3) * ms];
-  }
-  for (; q < q1; ++q) a0 += arow[q] * mcol[q * ms];
-  return (a0 + a1) + (a2 + a3);
-}
 
 // x <- A^{-1} b from one block's LU, run by all lanes of warp 0 and no other
 // warp. On entry the shared vector tmp holds b[perm], visible to warp 0; tmp is
@@ -197,204 +173,6 @@ __device__ void bt_lu_solve_warp0(const double* lu, int ni, const double* tmp, d
   }
 }
 
-// In-place partial-pivot LU of the ni x ni shared block A by the whole thread
-// block (nt a multiple of kWarpSize, at most kMaxThreads); sperm gets the CPU
-// lu_inplace permutation. Pivot rule as the CPU kernel's: a row below k wins
-// only on a strict |a| > |A[k][k]|, the smallest row wins a tie, and a NaN
-// candidate never wins. cand_abs, cand_val and cand_row hold kMaxWarps entries.
-// Entry: A visible to every thread. Barriers: one after sperm is initialised,
-// then per column (1) each warp's candidate published, (2) the row swap and the
-// multipliers written, (3) the trailing update written. Every thread reaches
-// every barrier and every full-warp shuffle. Exit: A and sperm visible.
-__device__ void bt_lu_block(double* A, int32_t* sperm, double* cand_abs, double* cand_val,
-                            int32_t* cand_row, int ni, int tid, int nt) {
-  const int lane = tid & kLaneMask, warp = tid / kWarpSize, nwarps = nt / kWarpSize;
-  for (int i = tid; i < ni; i += nt) sperm[i] = i;
-  __syncthreads();
-  for (int k = 0; k < ni; ++k) {
-    const double akk = A[k * ni + k];  // read before this column is written
-    double best_abs = -1.0, best_val = akk;
-    int best_row = ni;  // loses every tie against a real row
-    for (int i = tid; i < ni; i += nt) {
-      const double a = A[i * ni + k];
-      const double av = fabs(a);
-      double v = -1.0;
-      if (i > k && av == av) v = av;  // NaN never wins
-      if (v > best_abs || (v == best_abs && i < best_row)) {
-        best_abs = v;
-        best_val = a;
-        best_row = i;
-      }
-    }
-    for (int off = kWarpSize / 2; off > 0; off /= 2) {
-      const double other_abs = __shfl_down_sync(kFullMask, best_abs, off);
-      const double other_val = __shfl_down_sync(kFullMask, best_val, off);
-      const int other_row = __shfl_down_sync(kFullMask, best_row, off);
-      if (other_abs > best_abs || (other_abs == best_abs && other_row < best_row)) {
-        best_abs = other_abs;
-        best_val = other_val;
-        best_row = other_row;
-      }
-    }
-    if (lane == 0) {
-      cand_abs[warp] = best_abs;
-      cand_val[warp] = best_val;
-      cand_row[warp] = best_row;
-    }
-    __syncthreads();  // (1)
-    // Every thread reduces the warp candidates itself, so the swap and the
-    // scale share one phase: the signed pivot rides the reduction, and column
-    // k belongs to the scale, so no thread re-reads A after a write.
-    double win_abs = cand_abs[0], win_val = cand_val[0];
-    int win_row = cand_row[0];
-    for (int q = 1; q < nwarps; ++q) {
-      if (cand_abs[q] > win_abs || (cand_abs[q] == win_abs && cand_row[q] < win_row)) {
-        win_abs = cand_abs[q];
-        win_val = cand_val[q];
-        win_row = cand_row[q];
-      }
-    }
-    const int p = (win_abs > fabs(akk)) ? win_row : k;  // -1 and NaN never beat |akk|
-    const double piv = (p != k) ? win_val : akk;
-    if (p != k) {
-      for (int j = tid; j < ni; j += nt) {  // full rows, L columns included
-        if (j == k) continue;               // column k is the scale's below
-        const double swp = A[k * ni + j];
-        A[k * ni + j] = A[p * ni + j];
-        A[p * ni + j] = swp;
-      }
-      if (tid == 0) {
-        const int32_t t = sperm[k];
-        sperm[k] = sperm[p];
-        sperm[p] = t;
-      }
-    }
-    if (tid == 0) A[k * ni + k] = piv;  // the swap's column-k entry
-    for (int i = k + 1 + tid; i < ni; i += nt) {
-      const double num = (i == p) ? akk : A[i * ni + k];  // post-swap column k
-      A[i * ni + k] = num / piv;
-    }
-    __syncthreads();  // (2)
-    const int w = ni - k - 1;  // rank-1 update, threads strided over the elements
-    if (w > 0) {
-      const int row_step = nt / w, col_step = nt % w;
-      int r = tid / w, c = tid % w;
-      for (int e = tid; e < w * w; e += nt) {
-        A[(k + 1 + r) * ni + k + 1 + c] -=
-            A[(k + 1 + r) * ni + k] * A[k * ni + k + 1 + c];
-        r += row_step;
-        c += col_step;
-        if (c >= w) {  // col_step < w and c < w, so one correction is enough
-          c -= w;
-          ++r;
-        }
-      }
-    }
-    __syncthreads();  // (3)
-  }
-}
-
-// Factors one batch element: A'_0 = D_0, A'_j = D_j - (c_j b_{j-1}^T) .*
-// inv(A'_{j-1}) with b = sup, c = sub, each A'_j LU-factored in shared memory
-// and written to lu and perm. Shared: A'_j and, with two buffers,
-// inv(A'_{j-1}) (ni^2 doubles each), the pivot candidates (2 kMaxWarps
-// doubles, kMaxWarps ints) and sperm (ni ints). With one buffer (kOneBuf) the
-// inverse reads the factors of A'_{j-1} back from lu, stored before the layer
-// barrier, builds inv in A itself and the Schur update runs in place: the same
-// operations in the same order. Per layer j >= 1 the barriers are: before the
-// inverse (A'_{j-1}, sperm and, with one buffer, its LU in lu visible), after
-// it (inv complete), after the Schur assembly (A'_j complete), then
-// bt_lu_block's.
-template <bool kOneBuf>
-__global__ void bt_factor_kernel(const double* __restrict__ diag,
-                                 const double* __restrict__ sup,
-                                 const double* __restrict__ sub, double* __restrict__ lu,
-                                 int32_t* __restrict__ perm, int nz, int ni) {
-  extern __shared__ double bt_smem[];
-  const int blk = ni * ni;  // fits an int: the block lives in shared memory
-  double* A = bt_smem;
-  double* Minv = kOneBuf ? A : A + blk;
-  double* cand_abs = Minv + blk;
-  double* cand_val = cand_abs + kMaxWarps;
-  int32_t* cand_row = reinterpret_cast<int32_t*>(cand_val + kMaxWarps);
-  int32_t* sperm = cand_row + kMaxWarps;
-
-  const int tid = threadIdx.x, nt = blockDim.x;
-  const int64_t b = blockIdx.x;
-  const double* D = diag + b * nz * blk;
-  const double* S = sup + b * (nz - 1) * ni;
-  const double* C = sub + b * (nz - 1) * ni;
-  double* L = lu + b * nz * blk;
-  int32_t* P = perm + b * nz * ni;
-
-  for (int i = tid; i < blk; i += nt) A[i] = D[i];
-  __syncthreads();
-  bt_lu_block(A, sperm, cand_abs, cand_val, cand_row, ni, tid, nt);
-  for (int i = tid; i < blk; i += nt) L[i] = A[i];
-  for (int i = tid; i < ni; i += nt) P[i] = sperm[i];
-
-  const int lane = tid & kLaneMask;
-  const int half = tid & 1;    // which half of a column's dot products
-  const int npair = nt / 2;    // columns in flight
-  const int num_rounds = (ni + npair - 1) / npair;
-  for (int j = 1; j < nz; ++j) {
-    __syncthreads();
-    const double* F = kOneBuf ? L + static_cast<int64_t>(j - 1) * blk : A;  // LU of A'_{j-1}
-    // inv(A'_{j-1}) column by column, a lane pair per column: lanes 2m and
-    // 2m+1 split every dot product and combine it with one __shfl_xor_sync.
-    // Column s solves A'_{j-1} x = e_s with the rhs permuted (e_s[perm]) and
-    // the column itself as lu_solve's tmp. The even lane owns the column's
-    // shared slot and __syncwarp publishes it to its partner. Whole pairs drop
-    // out together when s >= ni, and pair_mask names the lanes that remain.
-    for (int round = 0; round < num_rounds; ++round) {
-      const int s = tid / 2 + round * npair;
-      if (s >= ni) continue;
-      const int active_pairs = ni - (s - lane / 2);  // pairs of this warp with a column
-      const unsigned pair_mask =
-          (active_pairs >= kWarpSize / 2) ? kFullMask : ((1u << (2 * active_pairs)) - 1u);
-      double* inv_col = Minv + s;
-      if (half == 0)
-        for (int i = 0; i < ni; ++i) inv_col[i * ni] = (sperm[i] == s) ? 1.0 : 0.0;
-      for (int i = 0; i < ni; ++i) {  // unit-lower L
-        const int mid = i / 2;
-        double part = bt_dot4(F + i * ni, inv_col, ni, half ? mid : 0, half ? i : mid);
-        part += __shfl_xor_sync(pair_mask, part, 1);
-        if (half == 0) inv_col[i * ni] -= part;
-        __syncwarp(pair_mask);
-      }
-      for (int i = ni - 1; i >= 0; --i) {  // upper U
-        const int mid = i + 1 + (ni - i - 1) / 2;
-        double part = bt_dot4(F + i * ni, inv_col, ni, half ? mid : i + 1, half ? ni : mid);
-        part += __shfl_xor_sync(pair_mask, part, 1);
-        if (half == 0) inv_col[i * ni] = (inv_col[i * ni] - part) / F[i * ni + i];
-        __syncwarp(pair_mask);
-      }
-    }
-    __syncthreads();
-    // A'_j = D_j - (c b^T) .* inv(A'_{j-1}), threads strided over the elements
-    // so the reads of D_j and inv are coalesced and independent.
-    const double* Dj = D + static_cast<int64_t>(j) * blk;
-    const double* c = C + static_cast<int64_t>(j - 1) * ni;
-    const double* bb = S + static_cast<int64_t>(j - 1) * ni;
-    const int row_step = nt / ni, col_step = nt % ni;
-    int r = tid / ni, col = tid % ni;
-    for (int e = tid; e < blk; e += nt) {
-      A[e] = Dj[e] - (c[r] * bb[col]) * Minv[e];
-      r += row_step;
-      col += col_step;
-      if (col >= ni) {
-        col -= ni;
-        ++r;
-      }
-    }
-    __syncthreads();
-    bt_lu_block(A, sperm, cand_abs, cand_val, cand_row, ni, tid, nt);
-    double* Lj = L + static_cast<int64_t>(j) * blk;
-    for (int i = tid; i < blk; i += nt) Lj[i] = A[i];
-    for (int i = tid; i < ni; i += nt) P[static_cast<int64_t>(j) * ni + i] = sperm[i];
-  }
-}
-
 // The Gauss-Jordan factor's shared memory (layout at kGjOff*).
 struct BtGjSmem {
   double* f;       // kGjPivotBufs x kGjMaxNi multipliers: f[buf * kGjMaxNi + row]
@@ -434,12 +212,11 @@ __device__ __forceinline__ double bt_pick(const double (&v)[N], int i) {
 
 // The warp's best pivot candidate (largest best_abs, then smallest best_key),
 // left in every lane. best_abs is -1 (no candidate, or a NaN) or |a| >= 0, so
-// its bits plus one order the candidates as the doubles do: on sm_80+ three
-// REDUX operations take the largest image and the smallest key among its
-// holders, the winner of the five shuffle rounds below in about 150 cycles
-// instead of about 390 on a GH200, on the pivot chain.
+// its bits plus one order the candidates as the doubles do: three REDUX
+// operations take the largest image and the smallest key among its holders,
+// the winner of five xor-shuffle rounds in about 150 cycles instead of about
+// 390 on a GH200, on the pivot chain.
 __device__ __forceinline__ void bt_warp_argmax(double& best_abs, double& best_val, int& best_key) {
-#if __CUDA_ARCH__ >= 800
   const unsigned long long img =
       (best_abs < 0.0) ? 0ull : static_cast<unsigned long long>(__double_as_longlong(best_abs)) + 1ull;
   const unsigned hi = static_cast<unsigned>(img >> 32), lo = static_cast<unsigned>(img);
@@ -450,19 +227,6 @@ __device__ __forceinline__ void bt_warp_argmax(double& best_abs, double& best_va
   best_abs = __shfl_sync(kFullMask, best_abs, src);
   best_val = __shfl_sync(kFullMask, best_val, src);
   best_key = key;
-#else
-#pragma unroll
-  for (int off = kWarpSize / 2; off > 0; off /= 2) {
-    const double oa = __shfl_xor_sync(kFullMask, best_abs, off);
-    const double ov = __shfl_xor_sync(kFullMask, best_val, off);
-    const int ok = __shfl_xor_sync(kFullMask, best_key, off);
-    if (oa > best_abs || (oa == best_abs && ok < best_key)) {
-      best_abs = oa;
-      best_val = ov;
-      best_key = ok;
-    }
-  }
-#endif
 }
 
 // a / b from y = 1 / b (IEEE): q0 = a y and two FMA corrections with the
@@ -484,9 +248,9 @@ __device__ __forceinline__ double bt_div_by_rcp(double a, double b, double y, bo
 }
 
 // Run by the whole warp that owns column kk; v holds column kk of the lane's
-// rows, updated through step kk - 1. Chooses pivot kk with bt_lu_block's rule
-// (a row at a later position wins only on a strictly larger |a| than the row
-// at position kk, the earliest position wins a tie, a NaN never wins), then
+// rows, updated through step kk - 1. Chooses pivot kk with the CPU lu_inplace's
+// rule (a row at a later position wins only on a strictly larger |a| than the
+// row at position kk, the earliest position wins a tie, a NaN never wins), then
 // publishes it in buffer nb: f (v / piv, the LU's multiplier; 0 for the pivot
 // row and the padding), the pivot row and (piv, 1 / piv). The multipliers are
 // bt_div_by_rcp's corrected products with the IEEE 1 / piv, bitwise v / piv;
@@ -618,12 +382,13 @@ __device__ __forceinline__ void bt_gj_update(double (&a)[kGjRowSlots][kGjColSlot
   __syncwarp();  // rowbuf is reused by the next update of this phase
 }
 
-// The Gauss-Jordan factor of one batch element, the drop-in for
-// bt_factor_kernel (same arguments, same lu and perm). Per layer, pivot k of
-// the sweep with pivot (p, k): f_i = a_ik / a_pk, a_ij -= f_i a_pj (i != p,
-// j != k), a_ik = f_i, a_pj = -a_pj (1 / a_pk), a_pk = 1 / a_pk. On the rows not
-// yet pivoted that is the partial-pivot LU's trailing update (same pivots and
-// tie rule as bt_lu_block, the same division for f and fma for the update), so
+// Factors one batch element: A'_0 = D_0, A'_j = D_j - (c_j b_{j-1}^T) .*
+// inv(A'_{j-1}) with b = sup, c = sub, the LU of each A'_j and its perm
+// written to lu and perm as the CPU kernel's. Per layer, pivot k of the
+// Gauss-Jordan sweep with pivot (p, k): f_i = a_ik / a_pk, a_ij -= f_i a_pj
+// (i != p, j != k), a_ik = f_i, a_pj = -a_pj (1 / a_pk), a_pk = 1 / a_pk. On
+// the rows not yet pivoted that is the partial-pivot LU's trailing update (the
+// CPU kernel's pivots and tie rule, f by IEEE division, the update an fma), so
 // L and U are read off the published pivot rows and multipliers; after all ni
 // pivots the tile holds inv(A'_j) with inv[pos(r)][sperm(c)] = a_rc.
 // Lookahead: the owner of column k + 1 updates that column first, picks pivot
@@ -763,13 +528,12 @@ bt_gj_factor_kernel(const double* __restrict__ diag, const double* __restrict__ 
 
 // Copies one layer's LU block into shared memory with threads t0, t0 + n0, ...
 // The caller barriers. While warp 0 substitutes, the other warps call this as
-// the prefetch, so the global latency hides behind the solve. On sm_80+ each
-// thread issues all its 8-byte copies with cp.async and waits once, so its
-// whole share is in flight together; a load-then-store loop keeps one load per
+// the prefetch, so the global latency hides behind the solve. Each thread
+// issues all its 8-byte copies with cp.async and waits once, so its whole
+// share is in flight together; a load-then-store loop keeps one load per
 // thread in flight, and on a GH200 that latency bound the solve (78% of its
-// stall samples, at the shared-memory store). The same values either way.
+// stall samples, at the shared-memory store).
 __device__ inline void bt_load_block(double* A, const double* L, int blk, int t0, int n0) {
-#if __CUDA_ARCH__ >= 800
   for (int i = t0; i < blk; i += n0) {
     const unsigned dst = static_cast<unsigned>(__cvta_generic_to_shared(A + i));
     asm volatile("cp.async.ca.shared.global [%0], [%1], 8;" ::"r"(dst),
@@ -777,9 +541,6 @@ __device__ inline void bt_load_block(double* A, const double* L, int blk, int t0
                  : "memory");
   }
   asm volatile("cp.async.commit_group;\n\tcp.async.wait_group 0;" ::: "memory");
-#else
-  for (int i = t0; i < blk; i += n0) A[i] = L[i];
-#endif
 }
 
 __device__ inline void bt_swap(double*& a, double*& b) {
@@ -872,20 +633,11 @@ bt_solve_kernel(const double* __restrict__ lu,
   }
 }
 
-// Threads per block of the LU factor and the solve: 2 ni rounded up to a
-// warp, so the factor's inverse gives every column a lane pair in one round
-// (192 at ni = 89).
-int bt_threads(int ni) {
-  const int t = (2 * ni + kWarpSize - 1) / kWarpSize * kWarpSize;
-  return t > kMaxThreads ? kMaxThreads : (t < kWarpSize ? kWarpSize : t);
-}
+// Threads per block of the solve: 2 ni rounded up to a warp (192 at ni = 89),
+// at most 2 NB warps; warp 0 substitutes while the others prefetch.
+int bt_threads(int ni) { return (2 * ni + kWarpSize - 1) / kWarpSize * kWarpSize; }
 
 // Dynamic shared memory of each kernel; the layouts are in the kernels.
-size_t bt_factor_shmem(int ni, bool one_buf) {
-  return ((one_buf ? 1 : 2) * static_cast<size_t>(ni) * ni + 2 * kMaxWarps) * sizeof(double) +
-         (kMaxWarps + static_cast<size_t>(ni)) * sizeof(int32_t);
-}
-
 size_t bt_gj_factor_shmem(int ni) {
   return (kGjOffS + static_cast<size_t>(ni) * ni) * sizeof(double);
 }
@@ -901,10 +653,8 @@ using BtSolveKernel = void (*)(const double*, const int32_t*, const double*, con
 // The solve kernel with one or two buffers and NB register rows per lane.
 BtSolveKernel bt_solve_kernel_for(bool one_buf, int nb) {
   static const BtSolveKernel k[2][kMaxNb] = {
-      {bt_solve_kernel<false, 1>, bt_solve_kernel<false, 2>, bt_solve_kernel<false, 3>,
-       bt_solve_kernel<false, 4>},
-      {bt_solve_kernel<true, 1>, bt_solve_kernel<true, 2>, bt_solve_kernel<true, 3>,
-       bt_solve_kernel<true, 4>}};
+      {bt_solve_kernel<false, 1>, bt_solve_kernel<false, 2>, bt_solve_kernel<false, 3>},
+      {bt_solve_kernel<true, 1>, bt_solve_kernel<true, 2>, bt_solve_kernel<true, 3>}};
   return k[one_buf][nb - 1];
 }
 
@@ -917,7 +667,7 @@ struct BtOptIn {
 };
 
 // Dynamic shared memory above the 48 KB default needs a per-kernel opt-in.
-// Every factor and solve kernel is opted in once per device, to the device's maximum, so a
+// The factor and every solve kernel are opted in once per device, to the device's maximum, so a
 // call changes no attribute: two differently sized calls cannot race on one,
 // and only the launch happens while XLA records a command buffer. XLA makes
 // the device's context current before calling a handler, so
@@ -932,15 +682,10 @@ BtOptIn bt_opt_in(int device) {
   cudaError_t r = cudaDeviceGetAttribute(&optin, cudaDevAttrMaxSharedMemoryPerBlockOptin, device);
   if (r == cudaSuccess) r = cudaDeviceGetAttribute(&sms, cudaDevAttrMultiProcessorCount, device);
   int limit = optin;
-  constexpr int kFactorKernels = 3;
-  const void* kernels[kFactorKernels + 2 * kMaxNb] = {
-      reinterpret_cast<const void*>(bt_factor_kernel<false>),
-      reinterpret_cast<const void*>(bt_factor_kernel<true>),
-      reinterpret_cast<const void*>(bt_gj_factor_kernel)};
+  const void* kernels[1 + 2 * kMaxNb] = {reinterpret_cast<const void*>(bt_gj_factor_kernel)};
   for (int b = 0; b < 2; ++b)
     for (int nb = 1; nb <= kMaxNb; ++nb)
-      kernels[kFactorKernels + b * kMaxNb + nb - 1] =
-          reinterpret_cast<const void*>(bt_solve_kernel_for(b, nb));
+      kernels[1 + b * kMaxNb + nb - 1] = reinterpret_cast<const void*>(bt_solve_kernel_for(b, nb));
   for (const void* k : kernels) {
     cudaFuncAttributes a = {};
     if (r == cudaSuccess) r = cudaFuncGetAttributes(&a, k);
@@ -984,24 +729,12 @@ const char* bt_forced_buffers() {
   return v;
 }
 
-// VULCAN3_BT_FACTOR, read once per process: unset or empty picks the
-// factor kernel per call (bt_choose_factor); "gj" or "lu" forces the
-// Gauss-Jordan or the LU one, for the A/B and the tests.
-const std::string& bt_forced_factor() {
-  static const std::string v = [] {
-    const char* e = std::getenv("VULCAN3_BT_FACTOR");
-    return std::string((e == nullptr) ? "" : e);
-  }();
-  return v;
-}
-
 // Sets *one_buf to the variant a call of `batch` blocks launches. Two buffers
 // when they fit the device and need no more waves than one, a wave being the
 // SM count times the blocks of that variant resident on an SM (the occupancy
 // calculator, so the device's shared memory per SM, registers and block limit
-// all count): at equal waves the two-buffer kernels are as fast or faster
-// (the solve prefetches, the factor's inverse reads shared memory). Returns
-// the error that forbids the launch, if any.
+// all count): at equal waves the two-buffer kernel is as fast or faster (it
+// prefetches). Returns the error that forbids the launch, if any.
 ffi::Error bt_choose(int device, int64_t batch, const void* two, size_t shmem2, const void* one,
                      size_t shmem1, int threads, bool* one_buf) {
   BtOptIn opt;
@@ -1030,41 +763,6 @@ ffi::Error bt_choose(int device, int64_t batch, const void* two, size_t shmem2, 
   return bt_shared_fits(*one_buf ? shmem1 : shmem2, opt);
 }
 
-// Sets *gj to whether a factor call of block order `ni` runs the Gauss-Jordan
-// kernel: unless VULCAN3_BT_FACTOR=lu, whenever ni <= kGjMaxNi and the
-// occupancy calculator leaves at least one block of it resident on an SM (its
-// shared memory within the opt-in limit). No wave count: on a GH200 it beats
-// the LU kernel at every batch measured (132 to 1188 columns at ni 89), also
-// where it needs more waves. With VULCAN3_BT_FACTOR=gj a call it cannot
-// take is an error. Returns the error that forbids the call, if any.
-ffi::Error bt_choose_factor(int device, int ni, bool* gj) {
-  const std::string& forced = bt_forced_factor();
-  *gj = false;
-  if (forced == "lu") return ffi::Error::Success();
-  if (!forced.empty() && forced != "gj") {
-    return ffi::Error::InvalidArgument("VULCAN3_BT_FACTOR=" + forced +
-                                       ": expected gj, lu or unset");
-  }
-  BtOptIn opt;
-  ffi::Error err = bt_opt_in_checked(device, &opt);
-  if (err.failure()) return err;
-  const size_t shmem = bt_gj_factor_shmem(ni);
-  if (ni <= kGjMaxNi && shmem <= static_cast<size_t>(opt.limit)) {
-    int per_sm = 0;
-    const cudaError_t r = cudaOccupancyMaxActiveBlocksPerMultiprocessor(
-        &per_sm, bt_gj_factor_kernel, kGjThreads, shmem);
-    if (r != cudaSuccess) return ffi::Error::Internal(cudaGetErrorString(r));
-    *gj = per_sm > 0;
-  }
-  if (forced == "gj" && !*gj) {
-    return ffi::Error::InvalidArgument(
-        "VULCAN3_BT_FACTOR=gj: the Gauss-Jordan factor takes ni <= " +
-        std::to_string(kGjMaxNi) + " and needs " + std::to_string(shmem) +
-        " B of shared memory and a resident block on this device; ni = " + std::to_string(ni));
-  }
-  return ffi::Error::Success();
-}
-
 // The launch's own error, if any; execution errors surface on the stream.
 ffi::Error bt_launch_status() {
   const cudaError_t e = cudaGetLastError();
@@ -1080,27 +778,16 @@ ffi::Error FactorImplCuda(cudaStream_t stream, int32_t device, ffi::Buffer<ffi::
   if (err.failure()) return err;
   if (shape.batch == 0 || shape.ni == 0) return ffi::Error::Success();
   if (shape.batch > kMaxGridX) return ffi::Error::InvalidArgument("batch exceeds the CUDA grid limit");
-  bool gj = false;
-  err = bt_choose_factor(device, shape.ni, &gj);
+  if (shape.ni > kGjMaxNi) return ffi::Error::InvalidArgument("the CUDA factor takes ni <= 96");
+  BtOptIn opt;
+  err = bt_opt_in_checked(device, &opt);
   if (err.failure()) return err;
-  if (gj) {
-    bt_gj_factor_kernel<<<static_cast<unsigned int>(shape.batch), kGjThreads,
-                          bt_gj_factor_shmem(shape.ni), stream>>>(
-        diag.typed_data(), sup.typed_data(), sub.typed_data(), lu->typed_data(),
-        perm->typed_data(), shape.nz, shape.ni);
-    return bt_launch_status();
-  }
-  const int threads = bt_threads(shape.ni);
-  bool one_buf = false;
-  err = bt_choose(device, shape.batch, reinterpret_cast<const void*>(bt_factor_kernel<false>),
-                  bt_factor_shmem(shape.ni, false),
-                  reinterpret_cast<const void*>(bt_factor_kernel<true>),
-                  bt_factor_shmem(shape.ni, true), threads, &one_buf);
+  const size_t shmem = bt_gj_factor_shmem(shape.ni);
+  err = bt_shared_fits(shmem, opt);
   if (err.failure()) return err;
-  const auto kernel = one_buf ? bt_factor_kernel<true> : bt_factor_kernel<false>;
-  kernel<<<static_cast<unsigned int>(shape.batch), threads, bt_factor_shmem(shape.ni, one_buf),
-           stream>>>(diag.typed_data(), sup.typed_data(), sub.typed_data(), lu->typed_data(),
-                     perm->typed_data(), shape.nz, shape.ni);
+  bt_gj_factor_kernel<<<static_cast<unsigned int>(shape.batch), kGjThreads, shmem, stream>>>(
+      diag.typed_data(), sup.typed_data(), sub.typed_data(), lu->typed_data(), perm->typed_data(),
+      shape.nz, shape.ni);
   return bt_launch_status();
 }
 
