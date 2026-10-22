@@ -3,7 +3,7 @@
 Evidence for these items is in `notes.md` (this repo's, unless another repo is named).
 
 1. [decision] Claim `vulcan3` on PyPI: the README installs put TestPyPI first, so a TestPyPI package can shadow its PyPI namesake.
-2. [unverified] A/B the CUDA solve guard against `bd97791` on a NAS GH200: it is built and the `ffi` tests pass there (2026-10-20); the bitwise A/B, the subnormal-pivot block and the solve time are not done.
+2. [decision] The CUDA solve guard is bitwise and solves a subnormal pivot exactly, but costs ~7% solve time (notes "Efficiency program"); keep it (v4 ran with it) or recover the time.
 
 ## 1. vulcan3 on PyPI
 
@@ -24,22 +24,16 @@ packages are published).
   leaves [2^-1000, 2^1000] (the factor's `bt_div_by_rcp` range) and runs the old
   multiply otherwise; the CUDA library's stamp is the source hash plus a hash of
   the arch and `nvcc --version`.
-- Done 2026-10-20 at `a420570` [M]: `tools/gpu_kernel_test.pbs` (job 94875) built
-  both libraries (nvcc 12.6 V12.6.85; the stamp is two 64-hex hashes) and ran
-  `tests/test_solver_fast.py` on the GPU twice, plain and under XLA_CMDBUF=2's
-  flags: 53 passed / 21 skipped each (16 compute-sanitizer, 3 full tier, 2
-  stacked-rhs on the C++ handler), the `huge` (2^1003 pivot) and `tiny` cases
-  included. vulcan-retrieval's v4 job (94946) found that library current at start.
-- On a GH200 (environment as `tools/gpu_kernel_test.pbs` sets it), in two scratch
-  clones at `bd97791` (old) and main (new): build both libraries with the
-  production nvcc and `NVCC_ARCH=sm_90`; compare `cuobjdump --dump-resource-usage`
-  for `bt_solve_kernel`; run `tools/ab_cuda_solve.py` (its docstring has the
-  capture / run / compare steps). `tools/gpu_kernel_test.pbs` alone compares CUDA
-  with CPU, not the old kernel with the new.
+- Measured on NAS GH200s at `da54541` [M]: `tools/gpu_kernel_test.pbs` (job 96221,
+  nvcc 12.6): `tests/test_solver_fast.py` 33 passed / 13 skipped,
+  vulcan-forward's `tests/test_ckd.py` 7 passed. `tools/ab_cuda_solve.py` against
+  `bd97791` (jobs 96222, 96238): every digest bitwise equal, the subnormal-pivot
+  block exact on the new kernel, solve time +6.6% (W39b) and +8.1% (random); the
+  numbers are in notes "Efficiency program".
 - The cleanup (`2216219`) removed the `tiny` guard case from
   `tests/test_solver_fast.py` (row 3 scaled by 2^-975), the only test of the
   Gauss-Jordan kernel's division fallback; restoring it against the CPU kernel's
   first layer is the maintainer's call.
-- Done means: every A/B digest bitwise equal at 792 lanes, the subnormal-pivot
-  block finite on the new kernel, solve time unchanged, the `ffi` tests passing;
-  then delete `tools/ab_cuda_solve.py`.
+- Decision: keep the guard as is, or recover the ~7% and re-measure with
+  `tools/ab_cuda_solve.py`.
+  Done when decided; then delete `tools/ab_cuda_solve.py`.
