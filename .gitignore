@@ -118,3 +118,6 @@ parity-tests/
 # evidence sets (runs, .vul dumps, figures, timings). Kept outside the repo.
 validation_artifacts/
 validation_artifacts_*/
+
+# One-off scripts, tests and figures made on top of the code: never tracked.
+/scratch/

@@ -205,7 +205,7 @@ intentional_divergences:
     files: [atm/stellar_flux/sflux-epseri.txt]
     factor: 0.735**-4
     reason: >-
-      Master's builder (atm/make_spectra_in_nm.py; copy in tools/data_prep/)
+      Master's builder (atm/make_spectra_in_nm.py)
       multiplied by R_star where the surface-flux conversion divides, so the
       shipped eps Eri spectrum is low by R_star^4.
     recorded_in: tools/audit_master_parity.py::KNOWN_SFLUX_RESCALES

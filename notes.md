@@ -1,42 +1,42 @@
 # VULCAN3 notes
 
 What is true about the solver (package `vulcan3`, folder `VULCAN-JAX`) and why: the
-evidence behind each CLAUDE.md rule, design records, the parity and upstream-error
-ledger, superseded designs and a do-not-retry list. Open work is in `todo.md`;
-retrieval-side studies are in vulcan-retrieval's `notes.md`. [M] measured,
-[E] estimated, [I] inferred. Upstream citations (`op.py:NNN`, `build_atm.py:NNN`)
-are the pinned clone exoclime@80f75b9 in `VULCAN_Project/.oracles/vulcan2_ncho`,
-or vm_branch@84d010d where marked. A reference to `analysis/<name>` means the
-`<name>` entry here or in vulcan-retrieval's notes (the NAS `analysis/` tree was
-deleted 2026-10-19).
+results of earlier experiments and the ideas already tried, by topic, so that work is
+not repeated; the evidence behind each CLAUDE.md rule; design records; the parity and
+upstream-error ledger; superseded designs and the do-not-retry register. A run is
+recorded by its result and its name, not its date; git history is the log. Open work
+is in `todo.md`; retrieval-side studies are in vulcan-retrieval's `notes.md`.
+[M] measured, [E] estimated, [I] inferred. Upstream citations (`op.py:NNN`,
+`build_atm.py:NNN`) are the pinned clone exoclime@80f75b9 in
+`VULCAN_Project/.oracles/vulcan2_ncho`, or vm_branch@84d010d where marked. A
+reference to `analysis/<name>` means the `<name>` entry here or in vulcan-retrieval's
+notes (the NAS `analysis/` tree no longer exists).
 
 ## Current state
 
-- 0.18.0 on main after the 2026-10-20 cleanup (merged docs, CPU test default, dead
-  code removed); the last solver change is `eeb4873`. Tags
-  `v0.17.0`, `v0.18.0` (`760d96c`, the rename plus the W39b baseline merge),
-  `w39b-baseline-v2`. Package, distribution, CLI and env prefix are `vulcan3` /
-  `VULCAN3_*` since 0.18.0 (GitHub `imalsky/VULCAN3`); earlier releases were
-  `vulcan-jax`. 0.18.0 is on TestPyPI, not on PyPI [I].
+- 0.18.0 on main; the last solver change is `eeb4873`. Tags `v0.17.0`, `v0.18.0`
+  (`760d96c`, the rename plus the W39b baseline merge), `w39b-baseline-v2`. Package,
+  distribution, CLI and env prefix are `vulcan3` / `VULCAN3_*` since 0.18.0 (GitHub
+  `imalsky/VULCAN3`); earlier releases were `vulcan-jax`. 0.18.0 is on TestPyPI, not
+  on PyPI [I].
 - Consumers floor `vulcan3>=0.18.0`. Production: vulcan-retrieval's WASP-39b v4 on
   NAS GH200s at `a420570` (its `requirements-hpc.txt` pin): SNCHO, nz 100, ni 89,
   `ffi`, 528 lanes, `queue_compact`, grouped RHS (run settings are vulcan-retrieval's).
 - Step-count gates (`tests/test_step_count_gates.py`, full tier): HD189 1495,
   HD209 1211, W39b 1202 on arm64 and x86-64. HD189_vulcan3 is not in that test:
   2603 on arm64; on x86-64 it ends on its hybrid phase-1 budget at step 4018.
-- Tests: normal tier `python -m pytest tests`, budget 10 min on daw; after the
-  2026-10-20 cleanup 323 passed / 92 skipped in 6:29 at `-n 16` [M]. Full tier
-  (`VULCAN3_RUN_SLOW=1`, oracle on, no GPU): 352 passed / 63 skipped in 18:00 at
-  `-n 16` [M]; the skips are the CUDA kernel and compute-sanitizer tests.
-  `oracle.yml` is `workflow_dispatch` only, one process per slow test; last green
-  dispatch 37173830150 at `b372e65`.
+- Tests at 0.18.0 [M]: normal tier (`python -m pytest tests`, budget 10 min on daw)
+  323 passed / 92 skipped in 6:29 at `-n 16`; full tier (`VULCAN3_RUN_SLOW=1`,
+  oracle on, no GPU) 352 passed / 63 skipped in 18:00 at `-n 16`, the skips being
+  the CUDA kernel and compute-sanitizer tests. `oracle.yml` is `workflow_dispatch`
+  only, one process per slow test; last green dispatch 37173830150 at `b372e65`.
 - Oracle clones: `vulcan2_ncho` 80f75b9, `vulcan2_fastchem_ps_order` 8970337
   (provenance only, no test), `vulcan3_vm_branch` 84d010d. On daw the clones are
   clean at those commits with `core.fileMode false`, so
-  `VULCAN_MASTER_DIR=/home/imalsky/VULCAN_Project/.oracles/vulcan2_ncho` works.
+  `VULCAN_MASTER_DIR=~/VULCAN_Project/.oracles/vulcan2_ncho` works.
 - Fixtures: daw's `tests/data/*.npz` are an x86-64 rebuild at `2fef3c1`; the
-  tracked `FIXTURES.json` is the 2026-09-19 arm64 manifest (old `vulcan_jax`
-  field names), so `gen_fixtures.py --verify` fails on daw by design.
+  tracked `FIXTURES.json` (last changed in `15f3377`) is an arm64 manifest with the
+  old `vulcan_jax` field names, so `gen_fixtures.py --verify` fails on daw by design.
 
 ## Efficiency program
 
@@ -54,8 +54,8 @@ kept them.
 | One shared buffer per kernel, `a6e8498` (`VULCAN3_BT_BUFFERS`) | chosen per call | bitwise | shared memory at ni 89 127.7 -> 64.4 kB, so 3 blocks/SM on GH200; daw factor 1.22x, solve 1.83x lanes/ms |
 | Solve substitution vector in registers, `0261b4a` | on under `ffi` | bitwise | daw primal lane-step 1.11-1.48x, tangent solve 2.59-2.64x |
 | 792 lanes (vulcan-retrieval `FFI_BLOCKS_PER_SM = 3`) | run config | n/a | ms/iter 264:25.8 396:40.0 528:49.7 792:67.2 1188:104.4; queue throughput 2.03x stock-396 |
-| Column-layout analytical Jacobian (`chem_jac_entries`), `3154d6d` | always | vs the per-layer form vmapped (deleted since; the measurement stands) [M, CPU, 2026-10-19]: HD189 bitwise; W39b 39 of 1.19M entries 1 ulp apart, all <= 7e-19 of their layer's peak (same with an 8-lane vmap) | with the grouped RHS 58.9 -> 54.6 ms at 396 lanes |
-| Grouped chemistry RHS (`VULCAN3_CHEM_RHS=grouped`), `3154d6d` | opt-in; production uses it | bitwise on GH200 (job 93028). CPU [M, 2026-10-19]: the RHS alone is bitwise vs codegen at the HD189 and W39b pre-loop states, solo and 8-lane vmap; HD189 solo + 8-lane vmap is pinned by `test_chem_rhs_codegen.py::test_grouped_rhs_is_bitwise_codegen`; the commit's CPU last-bit differences (1.3e-14 per cell, two 1e-12 tests) come from inside full runs and were not re-checked | as above (GH200, from the commit) |
+| Column-layout analytical Jacobian (`chem_jac_entries`), `3154d6d` | always | vs the per-layer form vmapped (since deleted; the measurement stands) [M, CPU]: HD189 bitwise; W39b 39 of 1.19M entries 1 ulp apart, all <= 7e-19 of their layer's peak (same with an 8-lane vmap) | with the grouped RHS 58.9 -> 54.6 ms at 396 lanes |
+| Grouped chemistry RHS (`VULCAN3_CHEM_RHS=grouped`), `3154d6d` | opt-in; production uses it | bitwise on GH200 (job 93028). CPU [M]: the RHS alone is bitwise vs codegen at the HD189 and W39b pre-loop states, solo and 8-lane vmap; HD189 solo + 8-lane vmap is pinned by `test_chem_rhs_codegen.py::test_grouped_rhs_is_bitwise_codegen`; the commit's CPU last-bit differences (1.3e-14 per cell, two 1e-12 tests) come from inside full runs and were not re-checked | as above (GH200, from the commit) |
 | Freeze without whole-carry ring copies; photolysis cond spans the step, `309cca9` | on | bitwise except `budget_drift` (<= 4e-5 relative; no certification changed) | 75.0 -> 58.9 ms/iter at 396 lanes |
 | Tail compaction (`queue_compact`), `01f1558`, `d7021cb` | off (`queue_compact: []`) | bitwise per job in tests; the retry pass at width 320 is roundoff-level | pass 1 520 -> 344 s |
 | Compacted tail loops run the main body, `eeb4873` | with compaction | bitwise (2376-job batch) | removes a 5.6 GB/tick ring copy at 264 lanes; with vulcan-retrieval's speed2 changes pass 1 344.0 -> 287.3 s |
@@ -84,7 +84,9 @@ Steps to certification (HD189) [M]: 1054 of 1495 steps are model time at the
 photolysis refreshes. The live levers are the photolysis cadence and the
 certificate window (a science decision).
 
-## Grid resolution: a real VULCAN discretization effect
+## Grid resolution
+
+A real VULCAN discretization effect, not a port bug.
 
 - At 62 layers (6.2/decade over 1e-9..7.6 bar) the grid smears a narrow SO2
   depletion below a sharp OH front (~2e-4 bar) and over-produces SO2 by up to ~1
@@ -94,26 +96,26 @@ certificate window (a science decision).
   dex at every nz; 62 -> 300 layers moves draw 117 by -1.713 dex in both codes,
   draw 301 by -0.072 in both, draw 345 -0.878 (master) vs -0.914 (vulcan3).
   Master's own shipped W39b example is already converged (75 vs 600 layers: <=
-  0.03 dex). Not a port bug. (vulcan2_xcheck)
+  0.03 dex). (vulcan2_xcheck)
 - Low-Kzz "bistability": two locally stable states that differ by where the
   photochemical front (H2 -> H, H2O photolysis, 1e-7..1e-6 bar) sits, by whole
   grid layers. At 100 layers 35/40 split lanes merge, at 150 layers 40/40. A
   62-layer grid artifact, not physics. (bistable_policy)
-- Non-uniform pressure grids are not supported (no pco-file input); a 12-line
-  patch to state.py was prototyped and not kept.
 - At nz 150 the vertical scheme is sound [M]: a manufactured tracer on a
   15x-stretched grid gives eddy order 1.95-1.99, central moldiff 2.00 (upwind
   1.00); HD189 nz 150 vs 597: CH4 5.5e-2, NH3 1.7e-2, ~1% at p95 at observable
   pressures.
+- Non-uniform pressure grids are not supported (no pco-file input; "Ideas not
+  adopted").
 
 ## Differences from VULCAN master
 
 Every place vulcan3 departs from the pinned VULCAN 2, with its recorded reason.
 Upstream errors corrected in the port are in "Parity ledger". The provenance
-audit (2026-10-19) covered only the early history (batch A: e46234a..7eda1af,
-Apr-Jul 2026, 60 commits); the later 328 commits (batches B-D) are not audited.
-The maintainer keeps every departure below ("Decided by the maintainer, not to be
-re-opened"), including those marked "provenance not recorded". Lines at `93896f6`.
+audit covered only batch A (e46234a..7eda1af, 60 commits); the later 328 commits
+(batches B-D) are not audited and not owed. The maintainer keeps every departure
+below ("Decided by the maintainer, not to be re-opened"), including those marked
+"provenance not recorded". Lines at `93896f6`.
 
 Convergence and certificate
 - Geometry term C21 (`geom_conv_tol` 1e-3; `default.yaml:176`, `W39b.yaml:170`;
@@ -134,12 +136,10 @@ Convergence and certificate
   equals that example (:139). Against master's W39b example (exoclime c870b1a,
   not on daw) the NAS audit lists "HC3N not ignored" and `mtol_conv` 1e-20 as
   stricter.
-- Removed: the JAX-only stall rule (`use_conv_stall`, 89b5962/9c2bb75; removed
-  `c009555`, 2026-09-25, before the fixedmass and v2 runs; it never fired on a
-  shipped case), c957288's accept test on the adapted rtol (reverted), bf01cd6's
-  W39b default with `wall_clock_max` 1800 s (reverted), 9c2bb75's `conver_ignore`
-  (now `[]`), `use_vm_mol` true in W39b (now false), the Gustafsson PI controller
-  (`cf993e2`; 11-17% more steps).
+- Removed JAX-only rules ("Superseded designs"): the `use_conv_stall` stall rule,
+  c957288's accept test on the adapted rtol (reverted), bf01cd6's W39b default with
+  `wall_clock_max` 1800 s (reverted), 9c2bb75's `conver_ignore` (now `[]`),
+  `use_vm_mol` true in W39b (now false), the Gustafsson PI controller.
 
 Integrator
 - Atom-conservation projection of the chemistry RHS and Jacobian onto fixed
@@ -152,7 +152,7 @@ Integrator
 - Ros2 stage repair C19 (`jax_step._repair_stage`, `jax_step.py:226`, called at
   :720, :738; no knob) and `config.DT_MAX_S` 1e15 (upstream `runtime*1e-5` =
   1e17). Reason: stage vectors leak element content at large dt; pinned upstream
-  fails the same column (S +32%). Later, unaudited commits.
+  fails the same column (S +32%). From later, unaudited commits.
 - Retry cap with force-accept (`batch_max_retries` 110, C11;
   `outer_loop.py:1077-1080`). Inert: at `dt_var_min` 0.5 the 97th consecutive
   reject from `DT_MAX_S` 1e15 (the 84th from the retrieval's 1e11) would take dt
@@ -169,8 +169,9 @@ Inputs and data
   species, and at solar upstream FastChem's SiO and Fe oxides bind up to ~17% of the O
   [I]; the ExoGibbs seed sees network elements only. Upstream's file is kept as
   `..._lodders2009.dat` with the P/S rows corrected (C12). For W39b the config's
-  `<X>_H` override the file (`ini_abun._base_vector`), so only He comes from it. A row-order
-  bug left EQ runs' carbon atomic about 05-07 to 06-08 (fixed 45cc4c7). Provenance not recorded.
+  `<X>_H` override the file (`ini_abun._base_vector`), so only He comes from it. A
+  row-order bug once left EQ runs' carbon atomic (fixed 45cc4c7). Provenance not
+  recorded.
 - EQ seed: ExoGibbs on the port's NASA-9 data, not FastChem (one dataset with the
   reverse rates; no aarch64 FastChem). On identical inputs it matches upstream FastChem
   to ~1e-6 dex (HO2 aside); seeded from either, HD189 and W39b keep 1495 / 1202 steps
@@ -233,7 +234,7 @@ departures above; their numbers are their own [M]. Their measurements are option
   `['HC3N']`, 3e4). `rtol_min`/`rtol_max` (0 / 1; upstream root 0.02 / 2.5) are
   dormant while `use_adapt_rtol` is false.
 - Photolysis cadence: W39b 5/5; batched runs key it on the shared attempted tick and
-  give a refilled lane one initial update. Effect unmeasured; measure.
+  give a refilled lane one initial update. Effect unmeasured.
 - Abundance file: keep. He is 13.5% below upstream's Lodders 2009 file, but upstream's
   root `vulcan_cfg.py:34` declares `He_H` 0.0838; this file makes the declared and the
   seeded He agree.
@@ -242,6 +243,161 @@ departures above; their numbers are their own [M]. Their measurements are option
 - ExoGibbs seed (zero tangent by design), the `K_eq` exponent clip, gravity
   `G Mp / Rp^2`, the gather Jacobian: keep.
 
+## Parity numbers
+
+Default NCHO network, 69 species, 878 reactions.
+
+| layer | max rel error | test |
+|---|---|---|
+| forward rates (439) / reverse rates (Gibbs) | 4.460e-16 / 5.705e-14 | `test_gibbs` |
+| atmosphere (`pco`, `Tco`, `Kzz`, `M`) | bit-exact | `test_default_master_parity` |
+| EQ seed | 7.9e-3 dex worst / 5.8e-5 median (HD189), 7.7e-3 / 9.1e-5 (W39b) | `test_eq_seed`, bar 2.4e-2 dex |
+| chemistry RHS | ~2e-13 worst cell, ~1e-16 bulk | `test_chem_rhs_codegen` |
+| analytical Jacobian vs `jacrev` | 2.8e-15 | `test_chem_jac_sparse` |
+| diffusion operator / upwind `vm` operator | ~1e-5 (cancellation) / ~2.7e-6 | `test_diffusion` |
+| block-Thomas: small case vs `np.linalg.solve` / VULCAN shape vs LAPACK banded (`_oracles.banded_solve`) / one Ros2 step | 1.8e-14 / 1.8e-15 [M] / 1.6e-9 | `test_block_thomas`, `test_ros2_step` |
+| photo tau / flux / J | 7e-16 / 1.2e-11 / 6.8e-12 | `test_photo` |
+
+- Matched steps: 20 steps 3e-9 over every cell, 200 steps 9e-8. Converged median
+  fractional VMR difference: W39b 1.1e-9, HD189 3.3e-6, HD209 1.4e-4 (upstream
+  against itself with one reaction changed: 7e-6). vm_branch vs `HD189_vulcan3`:
+  100 steps 3e-9, 200 steps 2.4e-5 (vm_branch itself does not converge there).
+- Static-vs-dynamic audit: the in-loop refresh (mu, g, Hp/dz/zco/dzi/Hpi, escape
+  flux) matches to 4.4e-16 per refresh; statics (Kzz, Dzz, alpha, ms, vz, vs, M,
+  Tco, pico, sat tables, cross sections) have no in-loop writer on either side.
+  Not covered: non-empty `T_cross_sp` or `ion_sp` runs.
+- Bars: the EQ seed bar is 3x the worst (both maxima HO2, whose FastChem row is older;
+  otherwise one NASA-9 dataset; floor ~4.3e-5 dex FastChem convergence); W39b bulk species
+  get a 1e-5 RHS bar because a ~1e-4 floor once let the converged state drift
+  0.25-0.49 dex; the HD209 projection cases assert the residual within 1e-12 of
+  the summed magnitude of the terms it cancels (the raw residual is a compiler
+  property: 3e9-1.2e10 with FMA on arm64, 197.4 on x86-64). `fastchem_newton_tol`
+  1e-12 (1e-14 does not converge); `fastchem_newton_max_iter` 450 is 2.1x the
+  worst layer.
+- Effective EQ He/H 0.08379150674 on all five presets.
+- Rate-range extrapolation (P16): a one-sided `min(T, hi)` clamp moves W39b SO2
+  +1.5% and HD189 NH3 up to +24.3%; the both-sided clamp's "-77% SO2" is an
+  artifact. The manuscript quotes the one-sided W39b number.
+
+## Parity ledger
+
+"master" = the pinned VULCAN 2 clone; upstream lines are 80f75b9; "fixed
+upstream" is against the VULCAN 3 line at a68d7151. "declared" = machine-checked
+(`tests/science_sources.yaml intentional_divergences`,
+`tools/audit_master_parity.py`, `tests/oracle.py::ORACLE_CODE_DELTAS`); "silent" =
+notes only. None affects the default gas-only HD189 result unless stated. C8-C10
+have no surviving record.
+
+A. Upstream errors corrected in the port
+
+| id | defect | upstream | port | size | fixed upstream |
+|---|---|---|---|---|---|
+| C1 | CH2CN + H + M k0 typo `1.00E-20` (DMS file swaps k0/k_inf) | `thermo/SNCHO_photo_network.txt:520` | `1.00E-29` (= e841d77, reaction 949); `KNOWN_THERMO_DIVERGENCES`, declared | unmeasured (trace nitrile) | bb9255b1 |
+| C2 | S2 / S8 condensate molar masses 45.019 / 360.152 | `op.py:1203`, `:1249` | 64.12 / 256.48, `conden.GAS_MASS_G_PER_MOL`; silent | rates 0.702x / 1.404x; 0 shipped | no |
+| C3 | H2O saturation = 0 at exactly 273 K | `build_atm.py:809` | `atm_setup.sat_p_jax` `where(T_C < 0, ice, liquid)`; silent | one grid point | no |
+| C4 | eps Eri spectrum low by R*^4 (3.4265x) | `atm/make_spectra_in_nm.py:25` | rebuilt file, `KNOWN_SFLUX_RESCALES`; declared | 3.43x on the eps Eri drive (JWST tool's WASP-107 b) | no |
+| C5 | duplicated `CH2_1` NASA-9 rows | `fastchem_vulcan/input/nasa9_logK_SNCHOTi.dat:19,421` | retired with the FastChem tree | 0 (rows identical) | 8970337 |
+| C6 | H2S saturation constant 0.001333, 10x low | `build_atm.py:857` | `atm_setup._CMHG_TO_BAR` 0.01333; declared | 10x on H2S p_sat; 0 shipped | no |
+| C7 | `NH3_l_s` mass is NH2's 16.023 | `thermo/all_compose.txt:167` | 17.031; declared | mean mass, moldiff only | no |
+| C12 | FastChem P/S row order vs hard-coded C++ slots (S molecules used P's polynomial) | `mass_action_constant.cpp:388-389` + `.dat` rows | rows reordered, `test_abundance_presets_keep_fastchem_slot_order`; declared | atomic S 2.6-3.1 dex, molecules <= 0.004 dex (initial state only) | no (8970337 inert) |
+| C13 | Earth example: `Ar` in `atom_list`, no Ar species | `cfg_examples/vulcan_cfg_Earth.py:6,39` | `runtime_validation` refuses carrier-less elements and non-network `const_mix` keys; silent | 0 shipped | 436cf3c6 |
+| C14 | network id column rewritten by the code, then read back | `make_chem_funs.py:109`, `op.py:243` | positional indexing, `Network.stale_ids`, `legacy_io._warn_stale_reaction_ids`; silent | 5 of 11 vendored networks stale, 3 silently wrong | no |
+| C15b | `make_bins_read_cross` drops a bin when `dbin_12trans` is out of range | `op.py:583-585` | `photo_setup._make_bins` raises; silent | unreachable shipped | no |
+| C19 | Ros2 stage vectors leak element content at large dt (only guard `loss_eps`) | `op.py:2914,2929`; `:2490`; `vulcan_cfg.py:136` | `jax_step._repair_stage` + `config.DT_MAX_S` (a larger `dt_max` raises); cap declared, repair silent | upstream fails the same column (S +32%); gates unchanged | no |
+| C20 | `OH + CH3 + M` Troe width in ln, not log10 | `op.py:204-205` | `rates_jax._troe_OH_CH3`; both sides via `ORACLE_CODE_DELTAS`; `test_troe_oh_ch3_is_visscher_moses_eq14` | rate 1.19-1.21x at Pr 0.1; max 0.111 ln VMR (HD189 CH4); gates unchanged | no |
+| L1 | `diffdf_settling_vm` drops the `vm` drift at the bottom interface | `op.py:1845-1848` | consistent; `test_diffusion`; silent | one cell, `use_settling` only | no |
+| L2 | vm_branch setup `vm` rolls a 2-D array without `axis=0` | `vulcan3_vm_branch/build_atm.py:803` | `axis=0`; silent | 5e-10 at step 2 | no |
+| P18 | `sflux-GJ1214.txt` pads 133.75-181.55 nm with 464 zero rows | `atm/stellar_flux/sflux-GJ1214.txt` | upstream's regenerated file, `gj1214_upstream_regenerated`; declared | 0 shipped; regeneration lowers every flux 1.392x | bb9255b1 |
+
+C12 was drafted as a report to upstream; whether it was sent is not recorded. C20
+is not reported upstream (maintainer).
+
+Port defects fixed back to parity, and JAX-only additions
+
+| id | kind | upstream | port | size |
+|---|---|---|---|---|
+| C11 | JAX-only | give-up is a dt floor, `op.py:2515-2516` | `batch_max_retries` 110 + force-accept (`outer_loop.py:1077-1080`) | inert: dt < dt_min ends the reject chain before the cap ("Differences from VULCAN master"); redo if `dt_max`, `dt_min` or `dt_var_min` change |
+| C15 | port defect | escape Jacobian term only under `use_vm_mol` (`op.py:2102-2107`, `:2426-2431`) | `diag_d.at[-1].add(diff_lim * use_vm_mol)` in `jax_ros2_step` | HD209 1206 -> 1211 |
+| C16 | port defect (= P6) | `step_ok` binds `rtol` at import (`op.py:2489,2495`); writes reach only `step_size` (`:3111`) | `_Statics.rtol_accept` | 1058 of 2893 decisions on HD189_vulcan3 |
+| C17 | port defect | bottom pins before delta and clip (`op.py:2945-2953`; `use_fix_H2He` `:2935-2941`) | pins before the rebalance; `test_use_fix_H2He` | 7.7e-3 on HD189 with `{'H2O': 0.5 EQ}` |
+| C18 | port defect | photo-frequency switch waits for `trun_min` / `count_min` (`op.py:1069`, `:819`) | `switch_to_final` gate | HD189 switches after step 121 on both |
+| - | port defects | all-NaN state raises (`op.py:1055`) | `longdy=+inf` (`test_nonfinite_never_converges.py`); clip on post-solve `ymix`; escape term on the Jacobian diagonal | NaN once scored converged |
+| C21 | JAX-only | refresh only at `count % update_frq == 0` (`op.py:904`); `stop()` on chemistry (`op.py:1056-1085`) | "Certificate candidate" block + `_real_terminate` | see "Certificates" |
+| C22 | JAX-only | none | `OuterLoop.run_jvp` (`_make_runner_jvp`); vulcan-forward `converged_y_jvp` | see "Certificates" |
+| C23 | JAX-only | unweighted per-step loss only (`op.py:2485-2490`) | `budget_ok_next` + `_real_terminate`; `test_element_budget_certificate.py`; vulcan-forward seeds `budget_ref`/`budget_err` per theta | see "Stage repair and element budget" |
+| C24 | port defect | `fix_y` snapshot before the relaxation (`op.py:871-873` before `:898-902`) | `_activate_fix_species` before the `conden_branch` cond; `test_conden_fix_species_pin_matches_master` | H2O_l_s column max cell relerr 1.0 -> 5.2e-15; 0 shipped |
+
+B. Found in upstream, kept at parity
+
+| id | defect | upstream | port | size | fixed upstream |
+|---|---|---|---|---|---|
+| P1 | unweighted atom-conservation diagnostic feeds `step_ok` and the adaptive rtol | `op.py:2472-2487` | `body_fn` `atom_loss_new` | unmeasured; a fix re-baselines | no |
+| P2 | two-stream pole `ll = -w0/(1/mu^2 - (1-w0)/edd^2)`; the clip is dead code | `op.py:2652`, clip `:2666` | `photo.compute_flux_jax` | 0.1-0.5% of cells, diffuse flux only; a fix is the analytic limit | no |
+| P3 | condensate mass in the gas mean molecular weight | `build_atm.py:520-525` | `atm_setup.compute_mean_mass` callers | condensation only; fix = restrict to `gas_indx` | no |
+| P4 | `atm_type='table'` stale `pico` for `dz` | `vulcan.py:118` -> `build_atm.py:406,530,554` | same | `dzi` up to 12%; not live | no |
+| P5 | `const_lowT` sum omits NH3, He as remainder | `build_atm.py:48`, `:213` | `ini_abun._load_const_lowT_y` | He/H 0.83% low at 10x N; not live | no |
+| P6 | = C16 | | | | no |
+| P7 | photolysis quadrature skips the bin-grid join interval | `op.py:2771-2780` | `photo.compute_J_jax_flat` | HO2 J 0.06% (W39b) / 0.32% (HD189), others <= 0.05% | no |
+| P8 | `HNCO + M -> H + NCO` carries M on the reactant side only | `thermo/SNCHO_photo_network.txt:557` | parser tracks each side; `rates_jax` delta_n | 1.3e-5 / 5.0e-5 / 6.0e-4 ln VMR on the gates; HD189_vulcan3 2803 -> 2668 | partly, a68d7151 (W39b's SNCHO_photo still one-sided) |
+| P9 | moldiff boundary rows do not conserve the column | `op.py:1549-1558` | `bdry0_grav` / `bdry_top_grav` in `jax_step` | +6.6e-19 to +7.9e-18 /s; C23 bounds it | no |
+| P10 | N(2D) NASA-9 thermo is a molecule's | `thermo/NASA9/N_2D.txt` | same file | K_eq 1.6e3-1.5e4x low; HD209 1211 -> 1206 if fixed; hot-top N 1000x | no |
+| P10 (second use of the ID) | escape Jacobian entry `top_flux/y[-1]` too large by `dzi[-1]` | `op.py:2106-2107` vs RHS `:1689` | comment at the `diff_lim` term in `jax_ros2_step` | LHS only; HD209's `diff_esc` inert | no |
+| P11 | C2H4O, CH3NO2, HCS listed twice with different masses | `all_compose.txt:76/158, 118/161, 136/212` | `composition._PARITY_DUPLICATES` (first row kept) | moldiff 7e-5 | no |
+| P12 | CS-family and H2SO4 masses inconsistent with the S row | `all_compose.txt:133-136,143` | same | ~0.2% on trace masses | no |
+| P13 | `CH3SH_branch.csv` grid non-monotonic at the tail | `thermo/photo_cross/CH3SH/CH3SH_branch.csv:142-143` | same | unmeasured | no |
+| P14 | TiSNCHO ships three reactions twice | `thermo/TiSNCHO_photo_network.txt:537-542` | `parse_network(duplicates_ok=True)` | 0 (unselected) | yes |
+| P15 | SNCHO_C3 ships `C2H2 + C -> C3 + H2` twice, different rates | `thermo/SNCHO_photo_network_C3.txt:474,479` | same | 0 (unselectable) | file renamed away |
+| P16 | rate fits evaluated outside their stated T range | `op.py:166,170` | same (`rates_jax`; no advisory) | see "Parity numbers" | no |
+| P17 | `diffdf` and `lhs_jac_tot` build `ysum` from different predicates | `op.py:1505` vs `:1981` | matches the derivative of `diffdf`; `tests/test_diffusion.py` tolerance | LHS only, a few S8 diagonal cells | no |
+| P19 | arithmetic layer-mean actinic flux | `op.py:2709` | `photo.compute_flux_jax` `ave_dir_flux` | see "Photolysis decisions" | no |
+
+Master-only defects, already better here (do not "restore parity")
+- Optical depth vs single-scattering albedo: master's `compute_tau` sums `photo_sp
+  U ion_sp` with T-dependent cross sections while `compute_flux`'s `w0` uses the
+  T-independent table (`op.py` ~2621-2672); the port builds both from one
+  `PhotoData`. 0 shipped; with `T_cross_sp = [SO2, H2S, H2O, CO2]` column J moves
+  up to 24.6%: quote no parity result for such a run.
+- Not inherited: FastChem's shared I/O filenames (`build_atm.py:128,131,153,169`);
+  `np.nanmax` on an empty selection for a dark column (`op.py:2737`); `S4` absent
+  from `sat_sp_list` (`build_atm.py:787` vs `:832`); kinetic NH3 condensation
+  looking for `NH3_l` (`op.py:1151`, a silent no-op); `check_conserv` byte-string
+  names under NumPy < 2 (`make_chem_funs.py:719-725`); example configs that cannot
+  start (`op.py:836,840,848`); the `fix_species` cold-trap tie (`op.py:888`
+  raises); `use_relax` truthiness (`op.py:1121`, `:1153`; the port gates per
+  species in `conden`).
+
+## Known bugs, all repos
+
+Do not trim this list in a cleanup; an entry changes only when its bug is fixed
+or re-measured. Detail is in "Parity ledger" or the named repo's notes.
+
+- vulcan3, inherited from upstream and kept: P1 unweighted atom-conservation
+  diagnostic; P2 two-stream pole; P3 condensate mass in the gas mean molecular
+  weight; P5 `const_lowT` initializer; P7
+  photolysis bin-grid join interval; P8 HNCO + M one-sided M; P9 diffusion
+  boundary rows leak the column; P10 N(2D) thermo is a molecule's polynomial
+  (maintainer: not fixing, upstream data); P19 arithmetic layer-mean actinic flux.
+- vulcan3, inherited from upstream, P4 (`atm_type='table'`): the table replaces the
+  pressure centres after the interfaces were built, and the interfaces are not
+  rebuilt (upstream the same order: `vulcan.py:118`, then `build_atm.py:406`); `dzi`
+  up to 12%. Every shipped config, W39b included, reads `atm_type: file`. A fix is
+  owed before a table route is used for science.
+- vulcan3, both codes, no shipped effect: the He thermal-diffusion factor 0.145 is
+  overwritten by the >4 amu loop's 0.25 (`atm_setup`); HNO3.txt's NASA-9 segments
+  are ordered 50-200/200-1000/1000-6000 K, so the two-segment parser uses the
+  50-200 K fit below 1000 K (HNO3 is in no shipped network).
+- vulcan3, measured unreachable: `K_eq_array` clips only the exp() argument
+  (`rates_jax._EXP_ARG_MAX` 709), not log K; the largest delta_n < 0 log K over
+  100-6000 K is 433.6; NCHO and SNCHO overflow only below 58 K. Fix only if a
+  config below ~60 K ships (clip the whole log K, re-run the gates).
+- vulcan-forward: `ckd.overlap` random-overlap jumps at sort crossings
+  (accepted); the photolysis-cadence switch ignores a profile's `yconv_min`
+  override (timing only).
+- vulcan-retrieval (unverified): the stage-2 elemental projection fixes carbon by
+  scaling CO only, so cool CH4-dominated columns start with negative CO and get
+  rejected (a theta-predictable cut of the prior's cold corner).
+- jwst-transit-authority: the mixed-segment bin.
+
 ## Operational
 
 - The JAX persistent compile cache key ignores `XLA_PYTHON_CLIENT_MEM_FRACTION`.
@@ -249,7 +405,7 @@ departures above; their numbers are their own [M]. Their measurements are option
   results (6114 ticks / 1679 unconverged vs 7658 / 237). Any process at a
   fraction other than 0.90 needs a private cache dir.
 - The cache was write-only while `photo_sp` was a set (the hash seed permuted
-  `cross_J` rows); `sorted(photo_sp)` / `sorted(ion_sp)` fixed it (HD189
+  `cross_J` rows); `sorted(photo_sp)` / `sorted(ion_sp)` fixed it (`2fdc66b`; HD189
   `count_max=3` 30.0 -> 1.6 s warm). Localize a miss with
   `JAX_DEBUG_LOG_MODULES=jax._src.cache_key` and `PYTHONHASHSEED=0`. `dt_max` is
   not in the model cache key: compare two values in two processes.
@@ -320,46 +476,9 @@ Rules whose evidence is a section of its own point there from CLAUDE.md
   shut down during the W39b tangent certificate (12.6 GB of a 16 GB runner) twice,
   before earlier failures reached the log. It rebuilds the fixtures at HEAD, so a
   daw check of a full-tier failure rebuilds them too (`gen_fixtures.py --all
-  --force`): the 2026-09-19 arm64 fixtures passed both tests that failed there.
+  --force`): the tracked arm64 fixtures passed both tests that failed there.
 - `python -m pytest`: the parity-audit tests fail under the console script (`No
   module named 'tools'`); `PYTHONSAFEPATH=1` fails `test_default_master_parity`.
-
-## Parity numbers
-
-Default NCHO network, 69 species, 878 reactions.
-
-
-| layer | max rel error | test |
-|---|---|---|
-| forward rates (439) / reverse rates (Gibbs) | 4.460e-16 / 5.705e-14 | `test_gibbs` |
-| atmosphere (`pco`, `Tco`, `Kzz`, `M`) | bit-exact | `test_default_master_parity` |
-| EQ seed | 7.9e-3 dex worst / 5.8e-5 median (HD189), 7.7e-3 / 9.1e-5 (W39b) | `test_eq_seed`, bar 2.4e-2 dex |
-| chemistry RHS | ~2e-13 worst cell, ~1e-16 bulk | `test_chem_rhs_codegen` |
-| analytical Jacobian vs `jacrev` | 2.8e-15 | `test_chem_jac_sparse` |
-| diffusion operator / upwind `vm` operator | ~1e-5 (cancellation) / ~2.7e-6 | `test_diffusion` |
-| block-Thomas: small case vs `np.linalg.solve` / VULCAN shape vs LAPACK banded (`_oracles.banded_solve`) / one Ros2 step | 1.8e-14 / 1.8e-15 [M, 2026-10-20] / 1.6e-9 | `test_block_thomas`, `test_ros2_step` |
-| photo tau / flux / J | 7e-16 / 1.2e-11 / 6.8e-12 | `test_photo` |
-
-- Matched steps: 20 steps 3e-9 over every cell, 200 steps 9e-8. Converged median
-  fractional VMR difference: W39b 1.1e-9, HD189 3.3e-6, HD209 1.4e-4 (upstream
-  against itself with one reaction changed: 7e-6). vm_branch vs `HD189_vulcan3`:
-  100 steps 3e-9, 200 steps 2.4e-5 (vm_branch itself does not converge there).
-- Static-vs-dynamic audit: the in-loop refresh (mu, g, Hp/dz/zco/dzi/Hpi, escape
-  flux) matches to 4.4e-16 per refresh; statics (Kzz, Dzz, alpha, ms, vz, vs, M,
-  Tco, pico, sat tables, cross sections) have no in-loop writer on either side.
-  Not covered: non-empty `T_cross_sp` or `ion_sp` runs.
-- Bars: the EQ seed bar is 3x the worst (both maxima HO2, whose FastChem row is older;
-  otherwise one NASA-9 dataset; floor ~4.3e-5 dex FastChem convergence); W39b bulk species
-  get a 1e-5 RHS bar because a ~1e-4 floor once let the converged state drift
-  0.25-0.49 dex; the HD209 projection cases assert the residual within 1e-12 of
-  the summed magnitude of the terms it cancels (the raw residual is a compiler
-  property: 3e9-1.2e10 with FMA on arm64, 197.4 on x86-64). `fastchem_newton_tol`
-  1e-12 (1e-14 does not converge); `fastchem_newton_max_iter` 450 is 2.1x the
-  worst layer.
-- Effective EQ He/H 0.08379150674 on all five presets.
-- Rate-range extrapolation (P16): a one-sided `min(T, hi)` clamp moves W39b SO2
-  +1.5% and HD189 NH3 up to +24.3%; the both-sided clamp's "-77% SO2" is an
-  artifact. The manuscript quotes the one-sided W39b number.
 
 ## Solver conditioning
 
@@ -379,7 +498,6 @@ reaches those dt (every solve instrumented):
 - Block-local pivoting can fail where banded LU does not: the outside review's
   generic 2x2 counterexample ([[0,1],[1,1]]) gives NaN. No physical W39b matrix has
   been shown to fail; real large-dt stage matrices against banded LU are not tested.
-
 - Reverse mode through the block solve is componentwise backward stable
   (Oettli-Prager 3.8e-14..2.4e-12 at dt 1e11) although a normwise residual against
   a random rhs reaches 1e23. The cotangent is the transpose of the primal sweep on
@@ -465,7 +583,7 @@ reaches those dt (every solve instrumented):
   with S +32%, and its Kzz-capped twin "converges" at 5965 steps with S -21.5%
   (C23 rejects it 21x over). No shipped config has a >= 3000 K bottom cell.
 - HD189_vulcan3 is a marginal count: its top moves with any bit-level change
-  (2607 / 2702 / 2803 / 2603 / 3242 over recent history). With
+  (2607 / 2702 / 2803 / 2603 / 3242 across such changes). With
   `photo_switch_longdy_thresh` pinned at 1.0 (it is derived as `yconv_min * 10`,
   so pin it in any photo-on convergence study) a tolerance ladder runs 2776 ->
   8715 steps and the shipped column sits 5.3e-3 (top-decile median |d ln VMR|)
@@ -498,7 +616,6 @@ C21 (geometry) and C22 (tangent); C23 is in "Stage repair and element budget".
 ## Adjoint record
 
 Reverse mode.
-
 
 - Every route that linearizes `df/dy` or iterates the bare body map fails on
   conditioning (`||f(y*)|| = 1.56e21` against production/loss ~1e28; >= 8
@@ -537,21 +654,20 @@ Reverse mode.
 
 ## Withdrawn configs
 
-Earth and K2-18b; an external user reports both converge upstream (todo).
-- Earth, 2000 steps: vulcan3 longdy 54.33 (atomic C at z=116, VMR 8.1e-12),
-  upstream 0.880 (C2H4 at z=81); neither converged (upstream needed C13 and four
-  missing keys to start). `atom_loss[H] = 2.98e3` is not a leak (`use_fix_sp_bot`
-  pins H2O). A full-length run was not done.
+Earth and K2-18b; an external user reports both converge upstream (their inputs
+were not obtained).
+- Earth on main [M] (`c61fd34`, CPU): vulcan3 hits the 20000-step cap at longdy
+  0.040 (below `yconv_min` 0.1); with `element_budget_tol: 1e9` it certifies at
+  11411 (longdy 0.0999): the budget term is the only blocker. Upstream (clone copy,
+  C13 fix, four missing keys to start) certifies at 13331; the two columns agree to
+  median 3.3e-4 dex, bulk species <= 2e-3 dex (worst CH3NH2 0.056). Inputs: the
+  clone's network, atm file and four NASA-9 files. `atom_loss[H] = 2.98e3` is not
+  a leak (`use_fix_sp_bot` pins H2O). A 2000-step run before the budget term had
+  neither code converged; this record supersedes it.
 - K2-18b (nz 130, ni 93, condensation on): hybrid 31002 steps at longdy 25.8,
   central 30001 at 0.459, upstream 1.00 at 3000; the clock froze at 6.18e4 s
   from step 3001. Its `remove_list` resolved by position to `NH3 + CH` and `SH +
   NO2`, and it omitted `batch_max_retries`.
-- Earth on main [M] (`c61fd34`, CPU; the records above predate the budget term):
-  vulcan3 hits the 20000-step cap at longdy 0.040 (below `yconv_min` 0.1); with
-  `element_budget_tol: 1e9` it certifies at 11411 (longdy 0.0999): the budget term
-  is the only blocker. Upstream (clone copy, C13 fix, four missing keys) certifies at
-  13331; the two columns agree to median 3.3e-4 dex, bulk species <= 2e-3 dex
-  (worst CH3NH2 0.056). Inputs: the clone's network, atm file and four NASA-9 files.
 - K2-18b re-add (needs the external user's DMS-2025 network and atm file): convert
   their YAML, check `remove_list` by position (C14), hash-pin inputs, run to end_case 1.
 
@@ -564,6 +680,9 @@ Earth and K2-18b; an external user reports both converge upstream (todo).
   dependency beyond jax / numpy / scipy / PyYAML, `exogibbs>=0.6.0,<0.7`,
   installed `--no-deps` plus `pandas` (its declared pyfastchem has no aarch64
   wheel).
+- The named configs stay inside the package (a pip install needs them there);
+  `vulcan3 --config <path>.yaml` runs a config file from anywhere (the maintainer
+  decided).
 - `OuterLoop` reads its config at construction and at the first runner build; a
   changed config means a new `OuterLoop`. Cfg-derived toggles are read from
   `self._cfg` at their use sites, so the runner and
@@ -633,7 +752,7 @@ Earth and K2-18b; an external user reports both converge upstream (todo).
   "HD189 1296 matches exactly" and W39b "1202 in both codes" (`eebc8a5`).
   `audit_master_parity.py` refuses a checkout with vulcan3 identifiers and has no
   default `--master`; a master child process imports nothing from the port.
-- `exoclime/VULCAN` now redirects to the VULCAN 3 line (its `vulcan_cfg.py` is
+- `exoclime/VULCAN` redirects to the VULCAN 3 line (its `vulcan_cfg.py` is
   byte-identical to `vulcan3_vm_branch`): the pinned clones are the only VULCAN 2
   reference.
 - Oracle vintage: upstream removed `NH3 + CH -> NH2 + CH2` from NCHO (exoclime
@@ -699,7 +818,6 @@ vulcan-retrieval gates on the resolved `chem.conden_spec`.
 
 Both kept for parity.
 
-
 - P19, the layer-mean actinic flux: inside a layer the beam is `F_top *
   exp(-dtau/mu)`, whose exact mean is the logarithmic mean; the code (and
   upstream) uses the arithmetic mean, ratio `(x/2)coth(x/2)` (converged HD189:
@@ -714,140 +832,20 @@ Both kept for parity.
 ### Decided by the maintainer, not to be re-opened
 
 The atom-conservation projection, the Ros2 stage repair, `DT_MAX_S`, the solar
-abundance file and the retry cap stay (2026-10-20, both referees keep them);
-batches B-D of the provenance audit are not owed. The geometry and element-budget
-certificate terms stay (2026-10-20, after both referees recommended it): the rule "keep VULCAN's original convergence criteria"
-keeps every VULCAN 2 test and allows extra tests that fix a confirmed defect; a
-relaxation of VULCAN's gate is never adopted.
+abundance file and the retry cap stay (both referees keep them); batches B-D of
+the provenance audit are not owed. The geometry and element-budget certificate
+terms stay (both referees recommended it): the rule "keep VULCAN's original
+convergence criteria" keeps every VULCAN 2 test and allows extra tests that fix a
+confirmed defect; a relaxation of VULCAN's gate is never adopted.
 
-The three ion-mode / low-T parity items of the 2026-09-08 audit stay at parity;
-P4, P5, P7, P8, P9, P10 stay; NH3 and CH stay in the default network (removal
-re-baselines every gate for no measured benefit); the C20 report is not filed
-upstream; the tangent-stall early stop is not built; `test_vmap_photo_batch`'s
-ymix assertion is the scale ratio `max|lane - solo| / max|soloA - soloB|`
-(`SCALE_TOL` 1e-4); the photo-on batched deviation (13 of 87 carry leaves at the
-last bit) is accepted as roundoff; the AD-build `dt_max` cap stays off the cold
-solve; `config.DT_MAX_S` stays 1e15. The JAX paper quotes 0.6.0, the version its
-data came from.
-
-## Known bugs, all repos
-
-Do not trim this list in a cleanup; an entry changes only when its bug is fixed
-or re-measured. Detail is in "Parity ledger" or the named repo's notes.
-
-- vulcan3, inherited from upstream and kept: P1 unweighted atom-conservation
-  diagnostic; P2 two-stream pole; P3 condensate mass in the gas mean molecular
-  weight; P5 `const_lowT` initializer; P7
-  photolysis bin-grid join interval; P8 HNCO + M one-sided M; P9 diffusion
-  boundary rows leak the column; P10 N(2D) thermo is a molecule's polynomial
-  (maintainer: not fixing, upstream data); P19 arithmetic layer-mean actinic flux.
-- vulcan3, inherited from upstream, P4 (`atm_type='table'`): the table replaces the
-  pressure centres after the interfaces were built, and the interfaces are not
-  rebuilt (upstream the same order: `vulcan.py:118`, then `build_atm.py:406`); `dzi`
-  up to 12%. Every shipped config, W39b included, reads `atm_type: file`. A fix is
-  owed before a table route is used for science.
-- vulcan3, both codes, no shipped effect: the He thermal-diffusion factor 0.145 is
-  overwritten by the >4 amu loop's 0.25 (`atm_setup`); HNO3.txt's NASA-9 segments
-  are ordered 50-200/200-1000/1000-6000 K, so the two-segment parser uses the
-  50-200 K fit below 1000 K (HNO3 is in no shipped network).
-- vulcan3, measured unreachable: `K_eq_array` clips only the exp() argument
-  (`rates_jax._EXP_ARG_MAX` 709), not log K; the largest delta_n < 0 log K over
-  100-6000 K is 433.6; NCHO and SNCHO overflow only below 58 K. Fix only if a
-  config below ~60 K ships (clip the whole log K, re-run the gates).
-- vulcan-forward: `ckd.overlap` random-overlap jumps at sort crossings
-  (accepted); the photolysis-cadence switch ignores a profile's `yconv_min`
-  override (timing only).
-- vulcan-retrieval (unverified): the stage-2 elemental projection fixes carbon by
-  scaling CO only, so cool CH4-dominated columns start with negative CO and get
-  rejected (a theta-predictable cut of the prior's cold corner).
-- jwst-transit-authority: the mixed-segment bin.
-
-## Parity ledger
-
-"master" = the pinned VULCAN 2 clone; upstream lines are 80f75b9; "fixed
-upstream" is against the VULCAN 3 line at a68d7151. "declared" = machine-checked
-(`tests/science_sources.yaml intentional_divergences`,
-`tools/audit_master_parity.py`, `tests/oracle.py::ORACLE_CODE_DELTAS`); "silent" =
-notes only. None affects the default gas-only HD189 result unless stated. C8-C10
-have no surviving record.
-
-A. Upstream errors corrected in the port
-
-| id | defect | upstream | port | size | fixed upstream |
-|---|---|---|---|---|---|
-| C1 | CH2CN + H + M k0 typo `1.00E-20` (DMS file swaps k0/k_inf) | `thermo/SNCHO_photo_network.txt:520` | `1.00E-29` (= e841d77, reaction 949); `KNOWN_THERMO_DIVERGENCES`, declared | unmeasured (trace nitrile) | bb9255b1 |
-| C2 | S2 / S8 condensate molar masses 45.019 / 360.152 | `op.py:1203`, `:1249` | 64.12 / 256.48, `conden.GAS_MASS_G_PER_MOL`; silent | rates 0.702x / 1.404x; 0 shipped | no |
-| C3 | H2O saturation = 0 at exactly 273 K | `build_atm.py:809` | `atm_setup.sat_p_jax` `where(T_C < 0, ice, liquid)`; silent | one grid point | no |
-| C4 | eps Eri spectrum low by R*^4 (3.4265x) | `atm/make_spectra_in_nm.py:25` | rebuilt file, `KNOWN_SFLUX_RESCALES`; declared | 3.43x on the eps Eri drive (JWST tool's WASP-107 b) | no |
-| C5 | duplicated `CH2_1` NASA-9 rows | `fastchem_vulcan/input/nasa9_logK_SNCHOTi.dat:19,421` | retired with the FastChem tree | 0 (rows identical) | 8970337 |
-| C6 | H2S saturation constant 0.001333, 10x low | `build_atm.py:857` | `atm_setup._CMHG_TO_BAR` 0.01333; declared | 10x on H2S p_sat; 0 shipped | no |
-| C7 | `NH3_l_s` mass is NH2's 16.023 | `thermo/all_compose.txt:167` | 17.031; declared | mean mass, moldiff only | no |
-| C12 | FastChem P/S row order vs hard-coded C++ slots (S molecules used P's polynomial) | `mass_action_constant.cpp:388-389` + `.dat` rows | rows reordered, `test_abundance_presets_keep_fastchem_slot_order`; declared | atomic S 2.6-3.1 dex, molecules <= 0.004 dex (initial state only) | no (8970337 inert) |
-| C13 | Earth example: `Ar` in `atom_list`, no Ar species | `cfg_examples/vulcan_cfg_Earth.py:6,39` | `runtime_validation` refuses carrier-less elements and non-network `const_mix` keys; silent | 0 shipped | 436cf3c6 |
-| C14 | network id column rewritten by the code, then read back | `make_chem_funs.py:109`, `op.py:243` | positional indexing, `Network.stale_ids`, `legacy_io._warn_stale_reaction_ids`; silent | 5 of 11 vendored networks stale, 3 silently wrong | no |
-| C15b | `make_bins_read_cross` drops a bin when `dbin_12trans` is out of range | `op.py:583-585` | `photo_setup._make_bins` raises; silent | unreachable shipped | no |
-| C19 | Ros2 stage vectors leak element content at large dt (only guard `loss_eps`) | `op.py:2914,2929`; `:2490`; `vulcan_cfg.py:136` | `jax_step._repair_stage` + `config.DT_MAX_S` (a larger `dt_max` raises); cap declared, repair silent | upstream fails the same column (S +32%); gates unchanged | no |
-| C20 | `OH + CH3 + M` Troe width in ln, not log10 | `op.py:204-205` | `rates_jax._troe_OH_CH3`; both sides via `ORACLE_CODE_DELTAS`; `test_troe_oh_ch3_is_visscher_moses_eq14` | rate 1.19-1.21x at Pr 0.1; max 0.111 ln VMR (HD189 CH4); gates unchanged | no |
-| L1 | `diffdf_settling_vm` drops the `vm` drift at the bottom interface | `op.py:1845-1848` | consistent; `test_diffusion`; silent | one cell, `use_settling` only | no |
-| L2 | vm_branch setup `vm` rolls a 2-D array without `axis=0` | `vulcan3_vm_branch/build_atm.py:803` | `axis=0`; silent | 5e-10 at step 2 | no |
-| P18 | `sflux-GJ1214.txt` pads 133.75-181.55 nm with 464 zero rows | `atm/stellar_flux/sflux-GJ1214.txt` | upstream's regenerated file, `gj1214_upstream_regenerated`; declared | 0 shipped; regeneration lowers every flux 1.392x | bb9255b1 |
-
-C12 was raised with upstream in a draft reply (2026-09-25); whether it was sent is
-not recorded. C20 is not reported upstream (maintainer).
-
-Port defects fixed back to parity, and JAX-only additions
-
-| id | kind | upstream | port | size |
-|---|---|---|---|---|
-| C11 | JAX-only | give-up is a dt floor, `op.py:2515-2516` | `batch_max_retries` 110 + force-accept (`outer_loop.py:1077-1080`) | dt < dt_min fires at the 97th reject from 1e15 (84th from 1e11), before the cap; redo if `dt_max`, `dt_min` or `dt_var_min` change |
-| C15 | port defect | escape Jacobian term only under `use_vm_mol` (`op.py:2102-2107`, `:2426-2431`) | `diag_d.at[-1].add(diff_lim * use_vm_mol)` in `jax_ros2_step` | HD209 1206 -> 1211 |
-| C16 | port defect (= P6) | `step_ok` binds `rtol` at import (`op.py:2489,2495`); writes reach only `step_size` (`:3111`) | `_Statics.rtol_accept` | 1058 of 2893 decisions on HD189_vulcan3 |
-| C17 | port defect | bottom pins before delta and clip (`op.py:2945-2953`; `use_fix_H2He` `:2935-2941`) | pins before the rebalance; `test_use_fix_H2He` | 7.7e-3 on HD189 with `{'H2O': 0.5 EQ}` |
-| C18 | port defect | photo-frequency switch waits for `trun_min` / `count_min` (`op.py:1069`, `:819`) | `switch_to_final` gate | HD189 switches after step 121 on both |
-| - | port defects, fixed 2026-07-24 | all-NaN state raises (`op.py:1055`) | `longdy=+inf` (`test_nonfinite_never_converges.py`); clip on post-solve `ymix`; escape term on the Jacobian diagonal | NaN once scored converged |
-| C21 | JAX-only | refresh only at `count % update_frq == 0` (`op.py:904`); `stop()` on chemistry (`op.py:1056-1085`) | "Certificate candidate" block + `_real_terminate` | see "Certificates" |
-| C22 | JAX-only | none | `OuterLoop.run_jvp` (`_make_runner_jvp`); vulcan-forward `converged_y_jvp` | see "Certificates" |
-| C23 | JAX-only | unweighted per-step loss only (`op.py:2485-2490`) | `budget_ok_next` + `_real_terminate`; `test_element_budget_certificate.py`; vulcan-forward seeds `budget_ref`/`budget_err` per theta | see "Stage repair and element budget" |
-| C24 | port defect | `fix_y` snapshot before the relaxation (`op.py:871-873` before `:898-902`) | `_activate_fix_species` before the `conden_branch` cond; `test_conden_fix_species_pin_matches_master` | H2O_l_s column max cell relerr 1.0 -> 5.2e-15; 0 shipped |
-
-B. Found in upstream, kept at parity
-
-| id | defect | upstream | port | size | fixed upstream |
-|---|---|---|---|---|---|
-| P1 | unweighted atom-conservation diagnostic feeds `step_ok` and the adaptive rtol | `op.py:2472-2487` | `body_fn` `atom_loss_new` | unmeasured; a fix re-baselines | no |
-| P2 | two-stream pole `ll = -w0/(1/mu^2 - (1-w0)/edd^2)`; the clip is dead code | `op.py:2652`, clip `:2666` | `photo.compute_flux_jax` | 0.1-0.5% of cells, diffuse flux only; a fix is the analytic limit | no |
-| P3 | condensate mass in the gas mean molecular weight | `build_atm.py:520-525` | `atm_setup.compute_mean_mass` callers | condensation only; fix = restrict to `gas_indx` | no |
-| P4 | `atm_type='table'` stale `pico` for `dz` | `vulcan.py:118` -> `build_atm.py:406,530,554` | same | `dzi` up to 12%; not live | no |
-| P5 | `const_lowT` sum omits NH3, He as remainder | `build_atm.py:48`, `:213` | `ini_abun._load_const_lowT_y` | He/H 0.83% low at 10x N; not live | no |
-| P6 | = C16 | | | | no |
-| P7 | photolysis quadrature skips the bin-grid join interval | `op.py:2771-2780` | `photo.compute_J_jax_flat` | HO2 J 0.06% (W39b) / 0.32% (HD189), others <= 0.05% | no |
-| P8 | `HNCO + M -> H + NCO` carries M on the reactant side only | `thermo/SNCHO_photo_network.txt:557` | parser tracks each side; `rates_jax` delta_n | 1.3e-5 / 5.0e-5 / 6.0e-4 ln VMR on the gates; HD189_vulcan3 2803 -> 2668 | partly, a68d7151 (W39b's SNCHO_photo still one-sided) |
-| P9 | moldiff boundary rows do not conserve the column | `op.py:1549-1558` | `bdry0_grav` / `bdry_top_grav` in `jax_step` | +6.6e-19 to +7.9e-18 /s; C23 bounds it | no |
-| P10 | N(2D) NASA-9 thermo is a molecule's | `thermo/NASA9/N_2D.txt` | same file | K_eq 1.6e3-1.5e4x low; HD209 1211 -> 1206 if fixed; hot-top N 1000x | no |
-| P10 (second use of the ID) | escape Jacobian entry `top_flux/y[-1]` too large by `dzi[-1]` | `op.py:2106-2107` vs RHS `:1689` | comment at the `diff_lim` term in `jax_ros2_step` | LHS only; HD209's `diff_esc` inert | no |
-| P11 | C2H4O, CH3NO2, HCS listed twice with different masses | `all_compose.txt:76/158, 118/161, 136/212` | `composition._PARITY_DUPLICATES` (first row kept) | moldiff 7e-5 | no |
-| P12 | CS-family and H2SO4 masses inconsistent with the S row | `all_compose.txt:133-136,143` | same | ~0.2% on trace masses | no |
-| P13 | `CH3SH_branch.csv` grid non-monotonic at the tail | `thermo/photo_cross/CH3SH/CH3SH_branch.csv:142-143` | same | unmeasured | no |
-| P14 | TiSNCHO ships three reactions twice | `thermo/TiSNCHO_photo_network.txt:537-542` | `parse_network(duplicates_ok=True)` | 0 (unselected) | yes |
-| P15 | SNCHO_C3 ships `C2H2 + C -> C3 + H2` twice, different rates | `thermo/SNCHO_photo_network_C3.txt:474,479` | same | 0 (unselectable) | file renamed away |
-| P16 | rate fits evaluated outside their stated T range | `op.py:166,170` | same (`rates_jax`; no advisory) | see "Parity numbers" | no |
-| P17 | `diffdf` and `lhs_jac_tot` build `ysum` from different predicates | `op.py:1505` vs `:1981` | matches the derivative of `diffdf`; `tests/test_diffusion.py` tolerance | LHS only, a few S8 diagonal cells | no |
-| P19 | arithmetic layer-mean actinic flux | `op.py:2709` | `photo.compute_flux_jax` `ave_dir_flux` | see "Photolysis decisions" | no |
-
-Master-only defects, already better here (do not "restore parity")
-- Optical depth vs single-scattering albedo: master's `compute_tau` sums `photo_sp
-  U ion_sp` with T-dependent cross sections while `compute_flux`'s `w0` uses the
-  T-independent table (`op.py` ~2621-2672); the port builds both from one
-  `PhotoData`. 0 shipped; with `T_cross_sp = [SO2, H2S, H2O, CO2]` column J moves
-  up to 24.6%: quote no parity result for such a run.
-- Not inherited: FastChem's shared I/O filenames (`build_atm.py:128,131,153,169`);
-  `np.nanmax` on an empty selection for a dark column (`op.py:2737`); `S4` absent
-  from `sat_sp_list` (`build_atm.py:787` vs `:832`); kinetic NH3 condensation
-  looking for `NH3_l` (`op.py:1151`, a silent no-op); `check_conserv` byte-string
-  names under NumPy < 2 (`make_chem_funs.py:719-725`); example configs that cannot
-  start (`op.py:836,840,848`); the `fix_species` cold-trap tie (`op.py:888`
-  raises); `use_relax` truthiness (`op.py:1121`, `:1153`; the port gates per
-  species in `conden`).
+The parity audit's three ion-mode / low-T items stay at parity; P4, P5, P7, P8,
+P9, P10 stay; NH3 and CH stay in the default network (removal re-baselines every
+gate for no measured benefit); the C20 report is not filed upstream; the
+tangent-stall early stop is not built; `test_vmap_photo_batch`'s ymix assertion
+is the scale ratio `max|lane - solo| / max|soloA - soloB|` (`SCALE_TOL` 1e-4); the
+photo-on batched deviation (13 of 87 carry leaves at the last bit) is accepted as
+roundoff; the AD-build `dt_max` cap stays off the cold solve; `config.DT_MAX_S`
+stays 1e15. The JAX paper quotes 0.6.0, the version its data came from.
 
 ## Known and deliberately untracked
 
@@ -883,10 +881,11 @@ Master-only defects, already better here (do not "restore parity")
   gather tables (`764c1ba`, 0.16.5). `git revert 764c1ba` undoes it alone (move
   vulcan-retrieval's HPC pin with it).
 - FastChem EQ seed and tree: replaced by ExoGibbs in 0.15.0.
-- Stall fallback (`use_conv_stall`): removed `c009555`.
-- Gustafsson PI controller: removed `cf993e2` (HD189 1296 -> 1475, W39b 1202 ->
-  1444 at the time). If re-ported, sanitize `(delta_prev/delta)**(beta/2)` to 1.0
-  at the no-history sentinel.
+- Stall fallback (`use_conv_stall`, 89b5962/9c2bb75): removed `c009555`, before
+  the fixedmass and v2 production runs; it never fired on a shipped case.
+- Gustafsson PI controller: removed `cf993e2` (11-17% more steps; HD189 1296 ->
+  1475, W39b 1202 -> 1444 at the time). If re-ported, sanitize
+  `(delta_prev/delta)**(beta/2)` to 1.0 at the no-history sentinel.
 - The 0.5.1 repair dt gate (repair only above 1e7 s): replaced by the absolute
   floor in 0.6.0 (HD209 carbon leaked 2.5e-4 under it, now 8e-6).
 - `solver_map="bare"` and its W39b adjoint gate: removed `d966010`.
@@ -896,13 +895,13 @@ Master-only defects, already better here (do not "restore parity")
 - Route B (opt-in smooth rainout: one-sided C1-hinge S8 sink, deep sulfur supply,
   flux ledger, implicit derivative): NO-GO at B0C (no steady state in 15000 cold
   steps; closure_frac 0.264; unrolled jvp off FD by 6-9 orders). Code in
-  `/home/imalsky/VULCAN_Project/.backup/git_tags_2026-09-26/VULCAN-JAX-smooth-rainout-b0c-no-go-2026-07-14.bundle`
+  `~/VULCAN_Project/.backup/git_tags_2026-09-26/VULCAN-JAX-smooth-rainout-b0c-no-go-2026-07-14.bundle`
   (tag a092d9e deleted). Route A (exact-endpoint pin, ~1-1.5 weeks [E]) was not
   requested.
 - `ffi_twisted` (two-ended block-Thomas): built, not merged (maintainer: no large
   architecture-specific code; net 649 lines; daw 1.9-2.0x up to 71 lanes,
   1.00-1.02x once the GPU is full). Patches in
-  `/home/imalsky/VULCAN_Project/.backup/speed_studies_2026-09/gpu_ideas/twisted/`.
+  `~/VULCAN_Project/.backup/speed_studies_2026-09/gpu_ideas/twisted/`.
 
 ## Ideas not adopted
 
@@ -920,7 +919,8 @@ Master-only defects, already better here (do not "restore parity")
 - A bin-averaged >240 nm grid with rectangle weights (segment median error 5.25%
   -> 0.068% at no extra bins).
 - Non-uniform pressure grid support (a 284-layer non-uniform grid matched uniform
-  600 to <= 0.06 sigma at ~55 h; vulcan-retrieval).
+  600 to <= 0.06 sigma at ~55 h; vulcan-retrieval); a 12-line pco-file patch to
+  `state.py` was prototyped and not kept.
 - A whole-loop command buffer for `ffi` (GH200 host syncs are GPU waits, 82% of
   API time) and caching the transport coefficients (XLA fusions 12% of primal
   kernel time): declined by the maintainer.
@@ -960,7 +960,7 @@ Linear solver and precision
 - An unpivoted Thomas sweep for the repair tridiagonal (no structural guarantee); parallel cyclic reduction (backward error 1.4e-5 at 1e15, cannot pivot); the sweep fully unrolled (jvp compile past 574 s at 7.9 GB).
 - Parallel-in-layer block solvers (BCR 89 ms vs 39 ms at 396 lanes, OOM at 1188); explicit-inverse solves (forward error ~600x); a 4-rung compaction ladder (not bitwise).
 - Float32 in the step: float32 factors (forward error 1-4e2 at dt 1e2, refinement diverges), float32 tangent solves with float64 refinement (diverge at dt >= 1e11), the whole step (non-finite); float32 Jacobian terms with float64 sums are accurate but touch ~12% of GPU kernel time.
-- AMF or block-Jacobi preconditioned GMRES/Richardson on the stage system: 14-81 iterations at the run's dt, > 300 at 1e6, cells O(1) off (`/home/imalsky/VULCAN_Project/.backup/speed_studies_2026-09/amf_tests/`).
+- AMF or block-Jacobi preconditioned GMRES/Richardson on the stage system: 14-81 iterations at the run's dt, > 300 at 1e6, cells O(1) off (`~/VULCAN_Project/.backup/speed_studies_2026-09/amf_tests/`).
 - Kernel restructurings (one-barrier owner-warp LU 0.89-1.03x, batched rank-1 update 0.90-1.04x, register-resident inverse at 253 registers, DMMA not bitwise, TMA): the factor gains only from more lanes per SM.
 - Summing the gather-table Jacobian with a `reduce`: XLA orders a reduce per program, so batch and queue disagreed by one accepted step (122 vs 121).
 - Fusing the step's two sign reductions into one `jnp.min`: a NaN plus a negative reclassifies a rejected step.
@@ -992,7 +992,7 @@ Process and environment
 - Route B smooth rainout or its middle paths, or a `custom_jvp` wrapper on `_runner` (see "Superseded designs").
 - Lifting the `use_sat_surfaceH2O` refusal into core (retrieval-specific).
 - Regenerating `.npz` fixtures when `AtmStatic` grows: splice a default in the loader.
-- Trusting a `.vul` byte comparison across runs made before the branch-key ordering fix (2026-07-30).
+- Trusting a `.vul` byte comparison across runs made before the branch-key ordering fix (`2fdc66b`).
 - `vulture` or grep as a dead-code proof on master-facing facades (`op.py:951` calls `.mean_mass()`; vulcan-forward calls `naming_solver`).
 - `k_arr = 1e-15` as "near-zero chemistry" in a synthetic test: three-body rates carry M = 1e15; use 1e-30.
 - Quoting a wall time without cpu/wall.

@@ -6,11 +6,34 @@ GPU-capable, standalone (vendored data, no sibling repo at runtime). It is the
 root of `vulcan3 <- vulcan-forward <- {vulcan-retrieval,
 jwst-transit-authority}`, so a change here reaches every consumer.
 
+## Maintainer rules (all repos)
+
+These four rules are identical in the project-root CLAUDE.md and every repo's; change
+them together.
+
+- **Layout.** Keep code, data and generated files apart. Shipped code, tests, inputs,
+  fixtures and validation assets stay where the repo's CLAUDE.md puts them. Work asked
+  for outside the product (analysis, one-off scripts and checks, their figures and
+  results) goes to `scratch/<topic>/`, one folder per question; run results go to
+  `output/`, and vulcan3's own figures to `plot/`. Keep these three top-level folders
+  gitignored and never commit their contents; never put such work in `src/`, `tests/`,
+  `tools/`, `validation/`, `data/` or the repo root. A durable conclusion goes to
+  notes.md; a reusable check becomes a tracked test or validation script.
+- **Figures.** An ad hoc plot request gets 1 to 3 figures, more only when asked, from one
+  script in `scratch/<topic>/`: no helper module, style layer or extra variants.
+- **Branches.** Work in the existing checkout on `main`. Create no branch, worktree or
+  copy of the repo, and switch no branch, unless the maintainer asks.
+- **Behind main.** At the start of work in a checkout, `git fetch origin`, then
+  `git rev-list --count HEAD..origin/main`. If the count is above 0, tell the
+  maintainer at once; if the fetch fails, say the state is unknown. This alerts and does
+  not block; never pull, rebase or reset unasked. Check again before a commit, a push or
+  a job on daw or NAS.
+
 ## Docs
 
 - Four root docs, nothing else: `README.md` (hand-written by the maintainer;
-  never edit it unless asked), `notes.md` (what is true and why, by section;
-  under 1000 lines: pay for a new line by trimming a duplicate or stale one),
+  never edit it unless asked), `notes.md` (the results of past experiments and the ideas
+  tried, by section, never a dated history; under 1000 lines: pay for a new line by trimming a duplicate or stale one),
   `todo.md` (open work: read it first, open or close items in the same pass) and
   this file (directions). The last three are tracked and public: no personal
   names except cited authors, no contact details, IDs, accounts, keys or chat
