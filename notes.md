@@ -51,7 +51,7 @@ kept them.
 | `ffi` solver: C++ / CUDA block-Thomas through XLA FFI | opt-in; production GH200 | roundoff, residual-matched; gates kept; reverse mode unsupported | GPU rows below |
 | Gauss-Jordan factor + reciprocal-pivot solve, `d992314` (the LU fallback is removed: CUDA `ffi` takes ni <= 96, else `fast`) | on under `ffi` | layer 0 bitwise, same permutation; dlogL median 9e-8 | 1.24x per step, 75.2 -> 60.7 ms/iter at 396 lanes |
 | REDUX pivot search, `bt_div_by_rcp`, cp.async solve loader, `a5b1215` | on under `ffi` (sm_80+) | bitwise | factor 29.1 -> 23.1 ms, solve 5.3 -> 4.6 ms at 792 lanes; pass 1 343.8 -> 300.6 s |
-| Solve guard: divide when a layer's pivot leaves [2^-1000, 2^1000], `2e947dc` | on under `ffi` | bitwise vs `bd97791` at 792 lanes (lu, perm, x, xs; W39b ni 89 and random blocks; NAS jobs 96222, 96238); a 2^-1030 pivot solves exactly (old kernel: nan, inf) [M] | solve +6.6% W39b (11.14 -> 11.87 ms), +8.1% random (4.52 -> 4.88 ms), two jobs within 0.1 ms [M]; ~1% of a v4 batch [E]. The trees also differ by `2216219` (NB 4 variant removed; NB 3 registers 76/79 -> 80/80, no spills) |
+| Solve guard: divide when a layer's pivot leaves [2^-1000, 2^1000], `2e947dc` | on under `ffi`; kept at its cost (the maintainer decided) | bitwise vs `bd97791` at 792 lanes (lu, perm, x, xs; W39b ni 89 and random blocks; NAS jobs 96222, 96238; the A/B script `tools/ab_cuda_solve.py` is in git at `770af2e`); a 2^-1030 pivot solves exactly (old kernel: nan, inf) [M] | solve +6.6% W39b (11.14 -> 11.87 ms), +8.1% random (4.52 -> 4.88 ms), two jobs within 0.1 ms [M]; ~1% of a v4 batch [E]. The trees also differ by `2216219` (NB 4 variant removed; NB 3 registers 76/79 -> 80/80, no spills) |
 | One shared buffer per kernel, `a6e8498` (`VULCAN3_BT_BUFFERS`) | chosen per call | bitwise | shared memory at ni 89 127.7 -> 64.4 kB, so 3 blocks/SM on GH200; daw factor 1.22x, solve 1.83x lanes/ms |
 | Solve substitution vector in registers, `0261b4a` | on under `ffi` | bitwise | daw primal lane-step 1.11-1.48x, tangent solve 2.59-2.64x |
 | 792 lanes (vulcan-retrieval `FFI_BLOCKS_PER_SM = 3`) | run config | n/a | ms/iter 264:25.8 396:40.0 528:49.7 792:67.2 1188:104.4; queue throughput 2.03x stock-396 |
@@ -199,10 +199,10 @@ Refused or not ported (no physics change)
   (C14). `.vul` keeps master's keys, shapes and dtypes, not byte identity.
 
 Retrieval per-run settings (vulcan-retrieval's W39b runs vs master's W39b
-example): fixed rtol (0.2 presolve / 0.05 certified; master 0.05 adaptive),
-cap-and-reject at 3000/5000 accepted steps (master stops at 1e4-2e4 and saves the
-unconverged state), dt_max 1e11 (1e17), photolysis keyed to ticks, the older
-network (the 2025 network changed no certification, +5% per tick), nz 62 over
+example): fixed rtol 0.05 (master 0.05 adaptive; v4 ran an rtol-0.2 presolve
+first), cap-and-reject at 5000 accepted steps (master stops at 1e4-2e4 and saves
+the unconverged state), dt_max 1e11 (1e17), photolysis keyed to ticks, the older
+network (the 2025 network changed no certification, +5% per tick), nz 100 over
 1e-9..7.6 bar (master: 150 over 5e-9..50 bar).
 
 Referee verdicts. An outside review (at `93896f6`) and a second referee checked the
@@ -846,7 +846,8 @@ tangent-stall early stop is not built; `test_vmap_photo_batch`'s ymix assertion
 is the scale ratio `max|lane - solo| / max|soloA - soloB|` (`SCALE_TOL` 1e-4); the
 photo-on batched deviation (13 of 87 carry leaves at the last bit) is accepted as
 roundoff; the AD-build `dt_max` cap stays off the cold solve; `config.DT_MAX_S`
-stays 1e15. The JAX paper quotes 0.6.0, the version its data came from.
+stays 1e15. The JAX paper quotes 0.6.0, the version its data came from. The CUDA
+solve guard stays at its ~7% solve cost ("Efficiency program").
 
 ## Known and deliberately untracked
 
@@ -874,6 +875,9 @@ stays 1e15. The JAX paper quotes 0.6.0, the version its data came from.
   pass with a test run: script-style `main()` bodies in 10 test files.
 - Reverse mode under `VULCAN3_SOLVER=ffi` is documented unsupported but not
   refused.
+- No CPU test reaches the Gauss-Jordan kernel's division fallback since `2216219`
+  removed the `tiny` case (row 3 scaled by 2^-975) from `tests/test_solver_fast.py`;
+  the GPU A/B solved a subnormal pivot exactly ("Efficiency program").
 
 ## Superseded designs
 
