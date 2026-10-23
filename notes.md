@@ -19,9 +19,8 @@ notes (the NAS `analysis/` tree no longer exists).
   distribution, CLI and env prefix are `vulcan3` / `VULCAN3_*` since 0.18.0 (GitHub
   `imalsky/VULCAN3`); earlier releases were `vulcan-jax`. 0.18.0 is on TestPyPI, not
   on PyPI [I].
-- Consumers floor `vulcan3>=0.18.0`. Production: vulcan-retrieval's WASP-39b v4 on
-  NAS GH200s at `a420570` (its `requirements-hpc.txt` pin): SNCHO, nz 100, ni 89,
-  `ffi`, 528 lanes, `queue_compact`, grouped RHS (run settings are vulcan-retrieval's).
+- Consumers floor `vulcan3>=0.18.0`. Production: vulcan-retrieval's WASP-39b on NAS
+  GH200s (SNCHO, nz 100, ni 89, `ffi`, grouped RHS; its run settings are its own).
 - Step-count gates (`tests/test_step_count_gates.py`, full tier): HD189 1495,
   HD209 1211, W39b 1202 on arm64 and x86-64. HD189_vulcan3 is not in that test:
   2603 on arm64; on x86-64 it ends on its hybrid phase-1 budget at step 4018.
@@ -200,9 +199,9 @@ Refused or not ported (no physics change)
   (C14). `.vul` keeps master's keys, shapes and dtypes, not byte identity.
 
 Retrieval per-run settings (vulcan-retrieval's W39b runs vs master's W39b
-example): fixed rtol 0.05 (master 0.05 adaptive; v4 ran an rtol-0.2 presolve
-first), cap-and-reject at 5000 accepted steps (master stops at 1e4-2e4 and saves
-the unconverged state), dt_max 1e11 (1e17), photolysis keyed to ticks, the older
+example): fixed rtol 0.05 (master 0.05 adaptive), cap-and-reject at 5000 accepted
+steps (master stops at 1e4-2e4 and saves the unconverged state), dt_max 1e11
+(1e17), photolysis keyed to ticks, the older
 network (the 2025 network changed no certification, +5% per tick), nz 100 over
 1e-9..7.6 bar (master: 150 over 5e-9..50 bar).
 
@@ -279,7 +278,10 @@ Default NCHO network, 69 species, 878 reactions.
 - Effective EQ He/H 0.08379150674 on all five presets.
 - Rate-range extrapolation (P16): a one-sided `min(T, hi)` clamp moves W39b SO2
   +1.5% and HD189 NH3 up to +24.3%; the both-sided clamp's "-77% SO2" is an
-  artifact. The manuscript quotes the one-sided W39b number.
+  artifact. The manuscript quotes the one-sided W39b number, which has no recorded
+  definition. Re-measured [M] (`rates_jax._arrhenius` patched, k0 and k_inf, 345 rates;
+  W39b CLI, CPU): SO2 +0.72% at its peak (3.1e-5 bar), +0.22% in the column, 0.077 dex
+  in one layer (1.5e-5 bar); CH4 up to 2.9 dex above 1e-6 bar.
 
 ## Parity ledger
 
@@ -468,7 +470,7 @@ Rules whose evidence is a section of its own point there from CLAUDE.md
   vmapped, summed in another order (4.1e-15), hence `custom_vmap` + `lax.map`.
 - Wall-time ratios need `user+sys ~ real`: cpu/wall 0.29 and 0.085 came from a
   closed laptop lid and the 16.8x speedup derived from it was retracted.
-  `tools/bench_table1.sh` enforces the check and runs each preset as one chunk.
+  `tools/bench_table1.sh` enforces it, HD189 only (its VULCAN 2 has HD189's inputs).
 - CI: unpinned, it resolved jax 0.11.0 with 3 failures of 258;
   `test_vmap_photo_batch`'s bit identity breaks from jax 0.10. The 16 GB runner
   was killed in two of six runs at four workers (~15.8 GB); conftest clears JAX
@@ -664,8 +666,7 @@ were not obtained).
   C13 fix, four missing keys to start) certifies at 13331; the two columns agree to
   median 3.3e-4 dex, bulk species <= 2e-3 dex (worst CH3NH2 0.056). Inputs: the
   clone's network, atm file and four NASA-9 files. `atom_loss[H] = 2.98e3` is not
-  a leak (`use_fix_sp_bot` pins H2O). A 2000-step run before the budget term had
-  neither code converged; this record supersedes it.
+  a leak (`use_fix_sp_bot` pins H2O).
 - K2-18b (nz 130, ni 93, condensation on): hybrid 31002 steps at longdy 25.8,
   central 30001 at 0.459, upstream 1.00 at 3000; the clock froze at 6.18e4 s
   from step 3001. Its `remove_list` resolved by position to `NH3 + CH` and `SH +
@@ -869,13 +870,11 @@ solve guard stays at its ~7% solve cost ("Efficiency program").
   1 (nz 50 `load_TPK` 4:14 on one core); no shipped config uses it.
 - A BC-flux row naming a species outside the network is skipped silently
   (`atm_setup.read_bc_flux`); upstream raises (`build_atm.py:759,768`).
-- `tools/bench_table1.sh` writes under the system temp dir unless `BENCH_OUT` is
-  set.
+- `tools/bench_table1.sh` writes under the system temp dir unless `BENCH_OUT` is set.
 - Undecided maintainer calls from the bloat audit: whether `steady_state_grad`
   stays as a research route, `HD189.yaml`, `VULCAN3_SOLVER=reference`. Left for a
   pass with a test run: script-style `main()` bodies in 10 test files.
-- Reverse mode under `VULCAN3_SOLVER=ffi` is documented unsupported but not
-  refused.
+- Reverse mode under `VULCAN3_SOLVER=ffi` is documented unsupported but not refused.
 - No CPU test reaches the Gauss-Jordan kernel's division fallback since `2216219`
   removed the `tiny` case (row 3 scaled by 2^-975) from `tests/test_solver_fast.py`;
   the GPU A/B solved a subnormal pivot exactly ("Efficiency program").
@@ -895,15 +894,11 @@ solve guard stays at its ~7% solve cost ("Efficiency program").
 - The 0.5.1 repair dt gate (repair only above 1e7 s): replaced by the absolute
   floor in 0.6.0 (HD209 carbon leaked 2.5e-4 under it, now 8e-6).
 - `solver_map="bare"` and its W39b adjoint gate: removed `d966010`.
-- The legacy `(var, atm, para)` entry and writer, `run_batch_jvp`,
-  `column_atom_loss`, live plotters: removed in 0.17.0. `_freeze_slot`: replaced
-  in `309cca9`. The `speed` branch: merged at `fe17de5`, deleted.
 - Route B (opt-in smooth rainout: one-sided C1-hinge S8 sink, deep sulfur supply,
   flux ledger, implicit derivative): NO-GO at B0C (no steady state in 15000 cold
   steps; closure_frac 0.264; unrolled jvp off FD by 6-9 orders). Code in
   `~/VULCAN_Project/.backup/git_tags_2026-09-26/VULCAN-JAX-smooth-rainout-b0c-no-go-2026-07-14.bundle`
-  (tag a092d9e deleted). Route A (exact-endpoint pin, ~1-1.5 weeks [E]) was not
-  requested.
+  (tag a092d9e deleted); Route A (exact-endpoint pin, ~1-1.5 weeks [E]) not asked for.
 - `ffi_twisted` (two-ended block-Thomas): built, not merged (maintainer: no large
   architecture-specific code; net 649 lines; daw 1.9-2.0x up to 71 lanes,
   1.00-1.02x once the GPU is full). Patches in

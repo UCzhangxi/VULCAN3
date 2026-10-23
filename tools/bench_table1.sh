@@ -5,7 +5,12 @@
 # is near 1 (contention or throttling inflates wall time). Step counts are
 # load-independent and always reported.
 #
-# Usage:  tools/bench_table1.sh [HD189|HD209|W39b] ...     (default: all three)
+# Usage:  tools/bench_table1.sh [HD189]
+#
+# HD189 only: the VULCAN 2.0 side runs the pinned clone's own vulcan_cfg.py, which
+# is HD189's (atmosphere, stellar flux, radius, 120 layers), swapping only the
+# network, so HD209 or W39b would time VULCAN 2.0 on HD189's inputs against
+# VULCAN-JAX on the planet's own and report the two as one case.
 
 set -euo pipefail
 
@@ -26,8 +31,11 @@ esac
 LOAD_MAX="${LOAD_MAX:-$(awk "BEGIN{printf \"%.1f\", $_NCPU/2}")}"
 
 mkdir -p "$OUT"
-PLANETS=("${@:-HD189 HD209 W39b}")
+PLANETS=("${@:-HD189}")
 read -r -a PLANETS <<< "${PLANETS[*]}"
+for P in "${PLANETS[@]}"; do
+  [ "$P" = HD189 ] || { echo "ABORT: $P: the VULCAN 2.0 side has HD189's inputs only (see the header)." >&2; exit 1; }
+done
 
 # --- network / atom_list per planet (import-locked in VULCAN-JAX, must be set BEFORE import) ---
 net_for() { case "$1" in
