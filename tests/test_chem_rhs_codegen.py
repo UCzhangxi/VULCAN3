@@ -2,7 +2,8 @@
 (master-faithful term order, NumPy float64): rtol=1e-5 on significant cells.
 The threshold absorbs XLA FMA fusion vs NumPy `*`-chains; actual worst-cell
 agreement is ~2e-13. The comparison with master's `chemdf` is test_chem.py.
-The grouped RHS (`VULCAN3_CHEM_RHS=grouped`) must equal the codegen bitwise.
+The grouped RHS (`VULCAN3_CHEM_RHS=grouped`) must equal the codegen bitwise
+(an expected failure on Apple Silicon, where the two agree to roundoff only).
 
 The (y, M, k) state is captured fresh from `RunState.with_pre_loop_setup`.
 """
@@ -11,6 +12,8 @@ from __future__ import annotations
 
 import os
 import pickle
+import platform
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -308,6 +311,11 @@ def test_codegen_matches_numpy_oracle(hd189_state):
 
 
 
+@pytest.mark.xfail(
+    sys.platform == "darwin" and platform.machine() == "arm64", strict=True,
+    reason="XLA:CPU on Apple Silicon rounds the grouped and codegen operation orders "
+    "differently: roundoff only (notes \"Efficiency program\", grouped RHS row)",
+)
 @pytest.mark.parametrize("n_lanes", [0, 8], ids=["solo", "vmap8"])
 def test_grouped_rhs_is_bitwise_codegen(hd189_state, monkeypatch, n_lanes):
     """`VULCAN3_CHEM_RHS=grouped` evaluates the codegen's operation trees as
