@@ -14,7 +14,7 @@ notes (the NAS `analysis/` tree no longer exists).
 
 ## Current state
 
-- 0.18.0 on main; the last solver change is `eeb4873`. Tags `v0.17.0`, `v0.18.0`
+- 0.18.0 on main; the last solver change is `dba59fd`. Tags `v0.17.0`, `v0.18.0`
   (`760d96c`, the rename plus the W39b baseline merge), `w39b-baseline-v2`. Package,
   distribution, CLI and env prefix are `vulcan3` / `VULCAN3_*` since 0.18.0 (GitHub
   `imalsky/VULCAN3`); earlier releases were `vulcan-jax`. 0.18.0 is on TestPyPI, not
@@ -58,6 +58,7 @@ kept them.
 | Column-layout analytical Jacobian (`chem_jac_entries`), `3154d6d` | always | vs the per-layer form vmapped (since deleted; the measurement stands) [M, CPU]: HD189 bitwise; W39b 39 of 1.19M entries 1 ulp apart, all <= 7e-19 of their layer's peak (same with an 8-lane vmap) | with the grouped RHS 58.9 -> 54.6 ms at 396 lanes |
 | Grouped chemistry RHS (`VULCAN3_CHEM_RHS=grouped`), `3154d6d` | opt-in; production uses it | bitwise on GH200 (job 93028). CPU [M]: the RHS alone is bitwise vs codegen at the HD189 and W39b pre-loop states, solo and 8-lane vmap; HD189 solo + 8-lane vmap is pinned by `test_chem_rhs_codegen.py::test_grouped_rhs_is_bitwise_codegen`; the commit's CPU last-bit differences (1.3e-14 per cell, two 1e-12 tests) come from inside full runs and were not re-checked | as above (GH200, from the commit) |
 | Freeze without whole-carry ring copies; photolysis cond spans the step, `309cca9` | on | bitwise except `budget_drift` (<= 4e-5 relative; no certification changed) | 75.0 -> 58.9 ms/iter at 396 lanes |
+| y ring written after that cond (`body_fn(defer_ring=True)`), `dba59fd`: a cond returning the written ring made XLA:GPU build the scatter out of place and copy it back, two 18.8 GB passes per 528-lane tick | on (batched) | bitwise: CPU A/B (refill, compaction, wraparound, evolution, hybrid), GH200 at 528 and 132 lanes, a 4-batch v5 run (per-draw steps, nautilus points and log L) | v5 shape, GH200: 110.9 -> 90.4 ms/tick at 528 lanes, 35.9 -> 30.8 at 132; v5 warm batch 848 -> 768 s |
 | Tail compaction (`queue_compact`), `01f1558`, `d7021cb` | off (`queue_compact: []`) | bitwise per job in tests; the retry pass at width 320 is roundoff-level | pass 1 520 -> 344 s |
 | Compacted tail loops run the main body, `eeb4873` | with compaction | bitwise (2376-job batch) | removes a 5.6 GB/tick ring copy at 264 lanes; with vulcan-retrieval's speed2 changes pass 1 344.0 -> 287.3 s |
 | Matrix-free stage operator (`jax_ros2_step(matrix_free=True)`) | forward mode; reverse passes `False` | primal bitwise on CPU; tangent within 8.5e-5 of dense | CPU gradient step 4.49x -> 1.58x the primal; GH200 1.21-1.27x (job 79534); the VJP is 1.9-3.2x slower, hence off in reverse |
@@ -919,8 +920,6 @@ solve guard stays at its ~7% solve cost ("Efficiency program").
   with a finished-lane mask for the straggler tail; (b) the chemistry RHS in the
   gather form (a new summation order moves step counts: needs a parity call).
   A fourth lane per SM at ni 89 needs ~10 rows in registers.
-- Photolysis cadence 1/1 as a retrieval config (-37% steps on HD189), gated on the
-  FD-vs-AD closure; the engine-side pin was reverted in vulcan-forward.
 - A bin-averaged >240 nm grid with rectangle weights (segment median error 5.25%
   -> 0.068% at no extra bins).
 - Non-uniform pressure grid support (a 284-layer non-uniform grid matched uniform
@@ -963,7 +962,8 @@ Linear solver and precision
 - Inverse carry in block-Thomas: 2.0x under jvp, 569x worse residual at dt 1e11.
 - Equilibration or iterative refinement for the large-dt block-Thomas residual: no run reaches it; equilibration costs +16% steps on HD189 and does not reduce the stage element defect.
 - An unpivoted Thomas sweep for the repair tridiagonal (no structural guarantee); parallel cyclic reduction (backward error 1.4e-5 at 1e15, cannot pivot); the sweep fully unrolled (jvp compile past 574 s at 7.9 GB).
-- Parallel-in-layer block solvers (BCR 89 ms vs 39 ms at 396 lanes, OOM at 1188); explicit-inverse solves (forward error ~600x); a 4-rung compaction ladder (not bitwise).
+- Parallel-in-layer block solvers (BCR 89 ms vs 39 ms at 396 lanes, OOM at 1188); explicit-inverse solves (forward error ~600x); a 4-rung compaction ladder (not bitwise; rungs 66 and 33 replay at 1.03x of a v5 batch, vulcan-retrieval notes "Pipeline speed").
+- Other cures for the per-tick y-ring copy: the pre-write lookback alone (bitwise; one copy of 15 gone, tick unchanged), `--xla_gpu_memory_limit_slop_factor=200` (remats 6066 -> 3430; copies and time unchanged), `CONDITIONAL` in the command-buffer list (no change). A sequential `lax.scan` for the two-stream sweeps is not faster than the associative scan on GH200.
 - Float32 in the step: float32 factors (forward error 1-4e2 at dt 1e2, refinement diverges), float32 tangent solves with float64 refinement (diverge at dt >= 1e11), the whole step (non-finite); float32 Jacobian terms with float64 sums are accurate but touch ~12% of GPU kernel time.
 - AMF or block-Jacobi preconditioned GMRES/Richardson on the stage system: 14-81 iterations at the run's dt, > 300 at 1e6, cells O(1) off (`~/VULCAN_Project/.backup/speed_studies_2026-09/amf_tests/`).
 - Kernel restructurings (one-barrier owner-warp LU 0.89-1.03x, batched rank-1 update 0.90-1.04x, register-resident inverse at 253 registers, DMMA not bitwise, TMA): the factor gains only from more lanes per SM.
