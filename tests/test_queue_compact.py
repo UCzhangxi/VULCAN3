@@ -34,16 +34,14 @@ Pins (CPU and GPU):
      program).
   7. (slow) jvp through a compacted queue matches the lockstep batch's jvp,
      primal and tangent (both within 1e-6 of their scale).
-  8. (CPU) The compiled tail loops copy no convergence ring outside a
-     conditional branch: they run the main loop's body, whose refill cond lets
-     the lane step's outputs alias the loop carry (a body that returned the
-     photolysis cond's outputs straight to the carry copied every lane leaf
-     each tick).
+  8. Every queue loop (traced, not compiled) ends in the refill cond, whose idle
+     branch passes the carry through, and no other cond returns the y ring: a
+     tail loop without the refill cond copied every lane leaf each tick, and a
+     photolysis cond returning the written ring made XLA:GPU rebuild and copy
+     it every tick (VULCAN3 notes "Efficiency program").
 """
 
 from __future__ import annotations
-
-import re
 
 import jax
 import jax.numpy as jnp
@@ -270,57 +268,19 @@ def test_compacted_queue_jvp_matches_the_batch_jvp():
     assert float(jnp.max(jnp.abs(dy_q - dy_b))) <= REL * scale
 
 
-_HLO_COMP = re.compile(r"^(ENTRY\s+)?%?([\w.\-]+)\s+\(.*\)\s*->\s*.*\{\s*$")
-_HLO_INSTR = re.compile(r"^\s*(?:ROOT\s+)?%?([\w.\-]+)\s*=\s*(.+?)\s+([\w\-]+)\((.*)$")
-_HLO_SHAPE = re.compile(r"^\(?\s*([a-z0-9]+)\[([0-9,]*)\]")
+def _eqns(jaxpr):
+    """Every equation of `jaxpr` and of the jaxprs it calls (loop bodies, cond
+    branches, jit bodies), depth first."""
+    for e in jaxpr.eqns:
+        yield e
+        for v in e.params.values():
+            for x in v if isinstance(v, (tuple, list)) else (v,):
+                sub = getattr(x, "jaxpr", x)
+                if hasattr(sub, "eqns"):
+                    yield from _eqns(sub)
 
 
-def _unconditional_copies_per_loop(text):
-    """{while body: [element counts of the copies one iteration always runs]}:
-    the body and what it calls (command buffers, calls), not conditional
-    branches, nested loop bodies or fusion bodies."""
-    comps, cur = {}, None
-    for line in text.splitlines():
-        h = _HLO_COMP.match(line)
-        if h:
-            cur = h.group(2)
-            comps[cur] = []
-        elif cur is not None and _HLO_INSTR.match(line):
-            comps[cur].append(line)
-    out = {}
-    for lines in list(comps.values()):
-        for ln in lines:
-            m = _HLO_INSTR.match(ln)
-            if m.group(3) != "while":
-                continue
-            body = re.search(r"\bbody=%?([\w.\-]+)", ln).group(1)
-            seen, todo, sizes = set(), [body], []
-            while todo:
-                c = todo.pop()
-                if c in seen or c not in comps:
-                    continue
-                seen.add(c)
-                for x in comps[c]:
-                    mm = _HLO_INSTR.match(x)
-                    op = mm.group(3)
-                    if op in ("copy", "copy-start"):
-                        sh = _HLO_SHAPE.match(mm.group(2))
-                        sizes.append(int(np.prod([int(d) for d in sh.group(2).split(",") if d]))
-                                     if sh else 0)
-                    if op in ("while", "fusion", "conditional"):
-                        continue
-                    todo += re.findall(r"\b(?:to_apply|calls)=%?([\w.\-]+)", x) if op != "fusion" else []
-                    for grp in re.findall(r"called_computations=\{([^}]*)\}", x):
-                        todo += [t.strip().lstrip("%") for t in grp.split(",") if t.strip()]
-            out[body] = sizes
-    return out
-
-
-@pytest.mark.skipif(jax.default_backend() != "cpu", reason=(
-    "CPU pin: at these tiny widths the GPU compiler turns the refill cond into "
-    "selects, so every loop of the GPU program copies the ring; the GPU check "
-    "needs a production-shape program, which this suite does not build"))
-def test_tail_loops_do_not_copy_the_lane_carry():
+def test_queue_loops_keep_the_ring_out_of_the_photolysis_cond():
     from test_vmap_photo_batch import _pin_cfg as _photo_cfg
 
     cfg = _photo_cfg(ini_update_photo_frq=4, final_update_photo_frq=4, update_frq=3)
@@ -330,13 +290,25 @@ def test_tail_loops_do_not_copy_the_lane_carry():
     st = stack_integ_states([sA, sB, sA, sB])
     atm = stack_atm_statics([aA, aB, aA, aB])
     jobs = (_with_caps(st, (7, 15, 24, 30)), atm)
-    ring = int(np.prod(st.y_time_ring.shape[1:]))     # one lane's convergence ring
-    assert ring > 1
-    text = jax.jit(lambda j: integ.run_queue(_ident, j, n_lanes=3, out_fn=_whole, chunk=1,
-                                             compact=(2, 1))).lower(jobs).compile().as_text()
-    loops = {b: sz for b, sz in _unconditional_copies_per_loop(text).items()}
-    # the queue's loops are the ones whose iterations could copy a ring at all
-    big = {b: [n for n in sz if n >= ring] for b, sz in loops.items()}
-    print(f"while bodies: {len(loops)}; ring-sized unconditional copies per loop "
-          f"{ {b: v for b, v in big.items() if v} }")
-    assert not any(big.values()), big
+
+    def is_ring(v, w):
+        return v.aval.shape == (w, *st.y_time_ring.shape[1:]) and v.aval.dtype == st.y_time_ring.dtype
+
+    widths = []
+    for loop in _eqns(_jaxpr(integ, jobs, compact=(2, 1)).jaxpr):
+        if loop.primitive.name != "while":
+            continue
+        body = loop.params["body_jaxpr"].jaxpr
+        (w,) = [w for w in (3, 2, 1) if any(is_ring(v, w) for v in body.outvars)] or (None,)
+        if w is None:
+            continue
+        widths.append(w)
+        (ring_out,) = [v for v in body.outvars if is_ring(v, w)]
+        refill = [e for e in body.eqns if e.primitive.name == "cond" and ring_out in e.outvars]
+        assert len(refill) == 1, f"width {w}: the carry's y ring does not come out of the refill cond"
+        assert any(not b.jaxpr.eqns and all(v in b.jaxpr.invars for v in b.jaxpr.outvars)
+                   for b in refill[0].params["branches"]), f"width {w}: no pass-through branch"
+        bad = [e for e in _eqns(body) if e.primitive.name == "cond" and e is not refill[0]
+               and any(is_ring(v, w) for v in e.outvars)]
+        assert not bad, f"width {w}: {len(bad)} cond(s) besides the refill return the y ring"
+    assert sorted(widths) == [1, 2, 3], widths

@@ -878,9 +878,14 @@ def _make_runner(
         return jnp.argmin(diffs_guarded)
 
     def _conv_jax(
-        s: JaxIntegState, accept_count_after: jnp.ndarray
+        s: JaxIntegState, accept_count_after: jnp.ndarray,
+        y_ring_old: jnp.ndarray, ring_idx: jnp.ndarray, y_slot: jnp.ndarray,
     ) -> "tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]":
         """(longdy, longdydt, ratio) against the `_lookback_index` slot.
+
+        `s` carries this step's time ring. The y lookback reads the pre-write
+        ring with this step's slot overlaid: the written ring's values, without
+        needing the written ring (`body_fn_batch` writes it after its cond).
 
         On the first iteration the ring is all-zero, which yields
         longdy ≈ |y/n_0| ~ O(1); the `ready` gate prevents acting on it.
@@ -890,7 +895,7 @@ def _make_runner(
         longdy_new, ratio = _longdy_reduce(
             s.y,
             s.ymix,
-            s.y_time_ring[indx],
+            jnp.where(indx == ring_idx, y_slot, y_ring_old[indx]),
             s.pv.n_0,
             atol=statics.atol,
             mtol_conv=statics.mtol_conv,
@@ -961,7 +966,7 @@ def _make_runner(
         return jnp.logical_not(real_term)
 
     def body_fn(s: JaxIntegState, atm_static_, lane_axis=None, it=None,
-                hold=None, photo_take=None):
+                hold=None, photo_take=None, defer_ring=False):
         # `lane_axis=None` is the single-profile trace, unchanged. A string
         # means the body runs under `jax.vmap(..., axis_name=lane_axis)` from
         # `body_fn_batch`: the refresh cond then takes a lane-uniform
@@ -1200,15 +1205,20 @@ def _make_runner(
         # Ring append (op.save_step). On reject this rewrites the same slot
         # with unchanged values. A batched lane the tick keeps (`hold`, or
         # this step went non-finite: `body_fn_batch`'s freeze rule) rewrites
-        # its pre-step slot instead, so the ring is written once, in place,
-        # and the freeze passes it through.
+        # its pre-step slot instead, and the freeze passes the ring through.
+        # Batched (`defer_ring`), the y slot is returned, not written:
+        # `body_fn_batch` writes it after its per-tick photolysis cond, since
+        # a cond returning the written (conv_step, nz, ni) ring made XLA:GPU
+        # rebuild and copy the whole ring every tick (notes "Efficiency
+        # program").
         ring_idx = _ring_slot(accept_count_next)
         y_slot, t_slot = y_next, t_next
         if hold is not None:
             keep = hold | jnp.logical_not(jnp.all(jnp.isfinite(y_next)))
             y_slot = jnp.where(keep, s.y_time_ring[ring_idx], y_next)
             t_slot = jnp.where(keep, s.t_time_ring[ring_idx], t_next)
-        y_time_ring_new = s.y_time_ring.at[ring_idx].set(y_slot)
+        y_time_ring_new = (s.y_time_ring if defer_ring
+                           else s.y_time_ring.at[ring_idx].set(y_slot))
         t_time_ring_new = s.t_time_ring.at[ring_idx].set(t_slot)
 
         # save_evolution capture. Master appends every accepted step and
@@ -1253,17 +1263,20 @@ def _make_runner(
             t_evo_new = s.t_evo
             evo_idx_new = s.evo_idx
 
-        # Snapshot state with (y, t, ring) updated, fed to _conv_jax.
+        # Snapshot state with (y, t, time ring) updated, fed to _conv_jax;
+        # the y ring goes in pre-write with the slot just written.
         s_for_conv = s._replace(
             y=y_next,
             ymix=ymix_next,
             t=t_next,
-            y_time_ring=y_time_ring_new,
             t_time_ring=t_time_ring_new,
         )
         longdy_new_val, longdydt_new_val, where_varies_most_new = _conv_jax(
             s_for_conv,
             accept_count_next,
+            s.y_time_ring,
+            ring_idx,
+            y_slot,
         )
         # Only refresh longdy/longdydt on accepted steps; rejected steps
         # don't change the ring contents in any meaningful way.
@@ -1533,7 +1546,7 @@ def _make_runner(
         )
         is_final_next = s.is_final_photo_frq | switch_to_final
 
-        return s._replace(
+        s_next = s._replace(
             y=y_next,
             y_prev=y_prev_next,
             ymix=ymix_next,
@@ -1586,6 +1599,7 @@ def _make_runner(
             t_evo=t_evo_new,
             evo_idx=evo_idx_new,
         )
+        return (s_next, ring_idx, y_slot) if defer_ring else s_next
 
     @jax.jit
     def runner(state: JaxIntegState, atm_static: AtmStatic):
@@ -1767,9 +1781,12 @@ def _make_runner(
         hold = already_done | real_term
 
         def tick(photo_take):
-            def advance(ss):
-                s_adv = body_fn(ss, atm_static_, lane_axis=lane_axis, it=it,
-                                hold=hold, photo_take=photo_take)
+            def advance(operand):
+                ss, y_ring = operand
+                ss = ss._replace(y_time_ring=y_ring)
+                s_adv, ring_idx, y_slot = body_fn(
+                    ss, atm_static_, lane_axis=lane_axis, it=it, hold=hold,
+                    photo_take=photo_take, defer_ring=True)
                 nan_now = jnp.logical_not(jnp.all(jnp.isfinite(s_adv.y)))
                 # Non-finite lanes freeze at the last good carry `ss` (reason
                 # 5); the bad `s_adv` is discarded.
@@ -1786,12 +1803,22 @@ def _make_runner(
                                   jnp.int32(TERM_RUNNING)),
                     ),
                 )
-                return frozen._replace(is_done=keep_old, termination_reason=reason_next)
+                frozen = frozen._replace(is_done=keep_old, termination_reason=reason_next,
+                                         y_time_ring=None)
+                return frozen, ring_idx, y_slot
 
             return advance
 
+        # The y ring enters the step read-only and is written after it
+        # (body_fn's `defer_ring`).
+        operand = (s._replace(y_time_ring=None), s.y_time_ring)
+
+        def write_ring(out):
+            s_out, ring_idx, y_slot = out
+            return s_out._replace(y_time_ring=s.y_time_ring.at[ring_idx].set(y_slot))
+
         if photo_branch is None:
-            return tick(None)(s)
+            return write_ring(tick(None)(operand))
         # Batched runs key the photolysis cadence to the shared tick (per-lane
         # counts dephase and would fire every iteration); the retry gate keeps
         # updates on accepted states and `live` keeps frozen lanes out. The
@@ -1809,7 +1836,7 @@ def _make_runner(
             & live
         )
         any_photo = jax.lax.psum(photo_take.astype(jnp.int32), lane_axis) > 0
-        return jax.lax.cond(any_photo, tick(photo_take), tick(None), s)
+        return write_ring(jax.lax.cond(any_photo, tick(photo_take), tick(None), operand))
 
     # One batched iteration over the lanes at the shared tick `it`.
     lane_step = jax.vmap(
@@ -2061,8 +2088,8 @@ def _make_runner(
             # refill cond is never taken, but it is what lets the lane
             # step's carry alias the loop's: a body that hands the lane
             # step's photolysis-cond outputs straight back to the carry makes
-            # XLA copy every lane leaf each tick, the (conv_step, nz, ni)
-            # convergence ring twice (job 93269: 20% of a 264-lane tick).
+            # XLA copy every lane leaf each tick (job 93269: 20% of a 264-lane
+            # tick).
             c = jax.lax.while_loop(until(nxt_rung), body, c)
         it, lanes, _atm_l, lane_job, _nxt, out = c
         # Flush the lanes still holding a job when the last loop ended.
