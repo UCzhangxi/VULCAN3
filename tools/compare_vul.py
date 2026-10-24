@@ -39,6 +39,9 @@ def main(argv=None) -> int:
     worst = 0.0
     print(f"{'species':8s} {'max|dlog10|':>12s} {'at bar':>10s} {'cells':>6s}")
     for s in args.species.split(","):
+        if s not in sp_r or s not in sp_t:
+            print(f"{s:8s} {'not in both networks':>30s}")
+            continue
         a, b = y_r[:, sp_r.index(s)], y_t[:, sp_t.index(s)]
         m = (a > args.floor) & (b > args.floor)
         d = np.where(m, np.abs(np.log10(np.where(m, a, 1.0)) - np.log10(np.where(m, b, 1.0))), 0.0)
